@@ -72,7 +72,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import HeaderSection from './components/HeaderSection.vue'
 import ConverterSection from './components/ConverterSection.vue'
 import MapSection from './components/MapSection.vue'
@@ -83,6 +83,7 @@ import LoadingOverlay from './components/LoadingOverlay.vue'
 import { useGeometry } from './composables/useGeometry'
 import { useMapOperations } from './composables/useMapOperations'
 import { useValidation } from './composables/useValidation'
+import * as turf from '@turf/turf'
 
 // 组合函数
 const {
@@ -136,10 +137,62 @@ const { geojsonError, wktError } = useValidation(geojsonText, wktText)
 // 地图组件引用
 const mapSectionRef = ref(null)
 
-// 设置地图引用
-onMounted(() => {
+// 计算面积的辅助函数
+const calculateArea = (layer) => {
+  try {
+    const geojson = layer.toGeoJSON()
+    if (!geojson.geometry.type.includes('Polygon')) {
+      return null
+    }
+
+    let area
+    if (layer.getRadius && typeof layer.getRadius === 'function') {
+      // 圆形面积计算
+      const radius = layer.getRadius()
+      area = Math.PI * radius * radius
+    } else {
+      area = turf.area(geojson)
+    }
+
+    // 格式化面积
+    if (area < 10000) {
+      return `${area.toFixed(2)} m²`
+    } else if (area < 1000000) {
+      return `${(area / 10000).toFixed(2)} 公顷`
+    } else {
+      return `${(area / 1000000).toFixed(2)} km²`
+    }
+  } catch (e) {
+    console.warn('计算面积失败:', e)
+    return null
+  }
+}
+
+// 设置地图引用 - 使用 watch 监听组件挂载
+watch(
+  mapSectionRef,
+  async (newRef) => {
+    if (newRef?.leafletMapRef) {
+      await nextTick()
+      try {
+        setLeafletMapRef(newRef.leafletMapRef)
+      } catch (error) {
+        console.warn('设置地图引用失败:', error)
+      }
+    }
+  },
+  { immediate: true },
+)
+
+// 也在 onMounted 中尝试设置
+onMounted(async () => {
+  await nextTick()
   if (mapSectionRef.value?.leafletMapRef) {
-    setLeafletMapRef(mapSectionRef.value.leafletMapRef)
+    try {
+      setLeafletMapRef(mapSectionRef.value.leafletMapRef)
+    } catch (error) {
+      console.warn('挂载时设置地图引用失败:', error)
+    }
   }
 })
 
@@ -149,10 +202,14 @@ const selectionInfo = computed(() => {
   if (count === 0) return '选中: --'
   let info = `选中: ${count}个图形`
   if (count === 1) {
-    const layer = Array.from(selectedLayers.value)[0]
-    const area = calculateArea(layer)
-    if (area) {
-      info += ` | 面积: ${area}`
+    try {
+      const layer = Array.from(selectedLayers.value)[0]
+      const area = calculateArea(layer)
+      if (area) {
+        info += ` | 面积: ${area}`
+      }
+    } catch (e) {
+      console.warn('计算选中图形面积失败:', e)
     }
   }
   return info
@@ -160,8 +217,35 @@ const selectionInfo = computed(() => {
 
 const totalArea = computed(() => {
   if (selectedLayers.value.size === 0) return null
-  // 计算总面积逻辑...
-  return null // 简化实现
+
+  try {
+    let totalAreaM2 = 0
+    selectedLayers.value.forEach((layer) => {
+      const geojson = layer.toGeoJSON()
+      if (geojson.geometry.type.includes('Polygon')) {
+        if (layer.getRadius && typeof layer.getRadius === 'function') {
+          const radius = layer.getRadius()
+          totalAreaM2 += Math.PI * radius * radius
+        } else {
+          totalAreaM2 += turf.area(geojson)
+        }
+      }
+    })
+
+    if (totalAreaM2 > 0) {
+      if (totalAreaM2 < 10000) {
+        return `${totalAreaM2.toFixed(2)} m²`
+      } else if (totalAreaM2 < 1000000) {
+        return `${(totalAreaM2 / 10000).toFixed(2)} 公顷`
+      } else {
+        return `${(totalAreaM2 / 1000000).toFixed(2)} km²`
+      }
+    }
+  } catch (e) {
+    console.warn('计算总面积失败:', e)
+  }
+
+  return null
 })
 </script>
 

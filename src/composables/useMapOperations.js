@@ -20,10 +20,35 @@ export function useMapOperations() {
   const selectedGeometryInfo = ref(null)
   const showCoordinateDetails = ref(false)
 
-  // 设置地图引用的方法
-  const setLeafletMapRef = (mapRef) => {
-    leafletMapRef.value = mapRef
-    console.log('Leaflet map reference set:', mapRef)
+  // 设置地图引用的方法 - 添加错误处理和延迟重试
+  const setLeafletMapRef = async (mapRef) => {
+    try {
+      if (!mapRef) {
+        console.warn('地图引用为空')
+        return
+      }
+
+      // 如果引用是组件实例，获取实际的ref
+      const actualRef = mapRef.value || mapRef
+
+      leafletMapRef.value = actualRef
+      console.log('地图引用设置成功:', actualRef)
+
+      // 验证地图引用是否有效
+      if (actualRef && typeof actualRef.drawOnMap === 'function') {
+        console.log('地图引用验证成功，功能可用')
+      } else {
+        console.warn('地图引用设置成功但功能不可用，稍后重试')
+        // 延迟重试
+        setTimeout(() => {
+          if (actualRef && typeof actualRef.drawOnMap === 'function') {
+            console.log('延迟验证成功，地图功能现在可用')
+          }
+        }, 1000)
+      }
+    } catch (error) {
+      console.error('设置地图引用失败:', error)
+    }
   }
 
   // 工具函数
@@ -71,9 +96,15 @@ export function useMapOperations() {
   // === 计算属性 ===
   const hasGeometry = computed(() => {
     try {
-      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
+      const mapRef = leafletMapRef.value
+      if (!mapRef || typeof mapRef.getDrawnItems !== 'function') {
+        return false
+      }
+
+      const drawnItems = mapRef.getDrawnItems()
       return drawnItems && drawnItems.getLayers().length > 0
     } catch (e) {
+      console.warn('检查几何存在性失败:', e)
       return false
     }
   })
@@ -90,7 +121,12 @@ export function useMapOperations() {
     }
 
     try {
-      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
+      const mapRef = leafletMapRef.value
+      if (!mapRef || typeof mapRef.getDrawnItems !== 'function') {
+        return stats
+      }
+
+      const drawnItems = mapRef.getDrawnItems()
       if (!drawnItems) return stats
 
       let totalLengthM = 0

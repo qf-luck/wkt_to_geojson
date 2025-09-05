@@ -4,7 +4,7 @@
       <h3>{{ title }}</h3>
       <div class="header-buttons">
         <el-button size="small" @click="loadSample">加载示例</el-button>
-        <el-button size="small" @click="formatContent" :disabled="!modelValue"> 格式化 </el-button>
+        <el-button size="small" @click="formatContent" :disabled="!modelValue"> 格式化</el-button>
         <el-button size="small" @click="clearInput">清空</el-button>
       </div>
     </div>
@@ -29,11 +29,13 @@
 
     <div class="button-group">
       <div class="left-buttons">
-        <el-button size="small" @click="undo" :disabled="!canUndo"> ↶ 撤销 </el-button>
-        <el-button size="small" @click="copyToClipboard" :disabled="!modelValue">
+        <el-button size="small" @click="undo" :disabled="!canUndo"> ↶ 撤销</el-button>
+        <el-button size="small" @click="handleCopyToClipboard" :disabled="!modelValue">
           📋 复制
         </el-button>
-        <el-button size="small" @click="saveToFile" :disabled="!modelValue"> 💾 保存 </el-button>
+        <el-button size="small" @click="handleSaveToFile" :disabled="!modelValue">
+          💾 保存
+        </el-button>
         <FileUpload
           :accept="type === 'geojson' ? '.geojson,.json' : '.wkt,.txt'"
           @file-loaded="handleFileLoaded"
@@ -182,6 +184,38 @@ const undo = () => {
     ElMessage.success('已撤销')
   } else {
     ElMessage.info('没有可撤销的操作')
+  }
+}
+
+// 修复：正确调用 copyToClipboard
+const handleCopyToClipboard = async () => {
+  if (!props.modelValue) {
+    ElMessage.warning('没有内容可复制')
+    return
+  }
+
+  try {
+    await copyToClipboard(props.modelValue)
+  } catch (error) {
+    console.error('复制失败:', error)
+  }
+}
+
+// 修复：正确调用 saveToFile 并添加文件名
+const handleSaveToFile = () => {
+  if (!props.modelValue) {
+    ElMessage.warning('没有内容可保存')
+    return
+  }
+
+  const timestamp = new Date().toISOString().split('T')[0]
+  const extension = props.type === 'geojson' ? 'geojson' : 'wkt'
+  const filename = `${props.type}_${timestamp}.${extension}`
+
+  try {
+    saveToFile(props.modelValue, filename)
+  } catch (error) {
+    console.error('保存失败:', error)
   }
 }
 
