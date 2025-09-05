@@ -34,63 +34,45 @@
         @selection-changed="handleSelectionChange"
         @mouse-position-changed="mousePosition = $event"
         @show-context-menu="showContextMenu"
-      />letMapRef"
-      :currentMapStyle="currentMapStyle"
-      :mousePosition="mousePosition"
-      :selectionInfo="selectionInfo"
-      :totalArea="totalArea"
-      :hasGeometry="hasGeometry"
-      :mapLoading="mapLoading"
-      @style-change="currentMapStyle = $event"
-      @geometry-updated="updateGeoJsonFromMap"
-      @selection-changed="handleSelectionChange"
-      @mouse-position-changed="mousePosition = $event"
-      @show-context-menu="showContextMenu"
       />
 
       <!-- 数据统计面板 -->
-      <StatsSection
-        :geometryStats="geometryStats"
-        @select-geometry-type="selectGeometryType"
+      <StatsSection :geometryStats="geometryStats" @select-geometry-type="selectGeometryType" />
+
+      <!-- 右键菜单 -->
+      <ContextMenu
+        :visible="contextMenuVisible"
+        :style="contextMenuStyle"
+        :selectedLayersCount="selectedLayers.size"
+        @copy-geojson="copySelectedAsGeoJSON"
+        @copy-wkt="copySelectedAsWKT"
+        @get-info="getGeometryInfo"
+        @measure-distance="measureDistance"
+        @delete-selected="deleteSelected"
+        @duplicate="duplicateSelected"
+        @crop="cropWithSelected"
+        @union="unionSelected"
+        @buffer="bufferSelected"
+        @convex-hull="convexHull"
+        @hide="hideContextMenu"
       />
+
+      <!-- 几何信息对话框 -->
+      <GeometryInfoDialog
+        v-model="geometryInfoVisible"
+        :geometryInfo="selectedGeometryInfo"
+        :showCoordinateDetails="showCoordinateDetails"
+        @toggle-coordinate-details="showCoordinateDetails = !showCoordinateDetails"
+      />
+
+      <!-- 加载指示器 -->
+      <LoadingOverlay v-if="globalLoading" :message="loadingMessage" />
     </div>
-
-    <!-- 右键菜单 -->
-    <ContextMenu
-      :visible="contextMenuVisible"
-      :style="contextMenuStyle"
-      :selectedLayersCount="selectedLayers.size"
-      @copy-geojson="copySelectedAsGeoJSON"
-      @copy-wkt="copySelectedAsWKT"
-      @get-info="getGeometryInfo"
-      @measure-distance="measureDistance"
-      @delete-selected="deleteSelected"
-      @duplicate="duplicateSelected"
-      @crop="cropWithSelected"
-      @union="unionSelected"
-      @buffer="bufferSelected"
-      @convex-hull="convexHull"
-      @hide="hideContextMenu"
-    />
-
-    <!-- 几何信息对话框 -->
-    <GeometryInfoDialog
-      v-model="geometryInfoVisible"
-      :geometryInfo="selectedGeometryInfo"
-      :showCoordinateDetails="showCoordinateDetails"
-      @toggle-coordinate-details="showCoordinateDetails = !showCoordinateDetails"
-    />
-
-    <!-- 加载指示器 -->
-    <LoadingOverlay
-      v-if="globalLoading"
-      :message="loadingMessage"
-    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import HeaderSection from './components/HeaderSection.vue'
 import ConverterSection from './components/ConverterSection.vue'
 import MapSection from './components/MapSection.vue'
@@ -117,7 +99,6 @@ const {
 } = useGeometry()
 
 const {
-  mapSection,
   currentMapStyle,
   mousePosition,
   selectedLayers,
@@ -147,12 +128,20 @@ const {
   selectedGeometryInfo,
   showCoordinateDetails,
   getGeometryInfo,
+  setLeafletMapRef,
 } = useMapOperations()
 
-const {
-  geojsonError,
-  wktError,
-} = useValidation(geojsonText, wktText)
+const { geojsonError, wktError } = useValidation(geojsonText, wktText)
+
+// 地图组件引用
+const mapSectionRef = ref(null)
+
+// 设置地图引用
+onMounted(() => {
+  if (mapSectionRef.value?.leafletMapRef) {
+    setLeafletMapRef(mapSectionRef.value.leafletMapRef)
+  }
+})
 
 // 计算属性
 const selectionInfo = computed(() => {

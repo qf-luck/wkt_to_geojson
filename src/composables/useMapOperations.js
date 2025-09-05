@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as turf from '@turf/turf'
 import wellknown from 'wellknown'
@@ -20,7 +20,13 @@ export function useMapOperations() {
   const selectedGeometryInfo = ref(null)
   const showCoordinateDetails = ref(false)
 
-  // === 工具函数 ===
+  // 设置地图引用的方法
+  const setLeafletMapRef = (mapRef) => {
+    leafletMapRef.value = mapRef
+    console.log('Leaflet map reference set:', mapRef)
+  }
+
+  // 工具函数
   const formatLength = (meters) => {
     if (meters < 1000) {
       return `${meters.toFixed(2)} m`
@@ -154,14 +160,16 @@ export function useMapOperations() {
     return stats
   })
 
-  // === 地图操作方法 ===
-  const drawOnMap = (text, type) => {
+  // 地图操作方法
+  const drawOnMap = async (text, type) => {
     try {
-      if (leafletMapRef.value?.drawOnMap) {
-        return leafletMapRef.value.drawOnMap(text, type)
+      if (!leafletMapRef.value?.drawOnMap) {
+        ElMessage.warning('地图未准备好')
+        return Promise.reject(new Error('地图未准备好'))
       }
-      ElMessage.warning('地图未准备好')
-      return Promise.reject(new Error('地图未准备好'))
+
+      await nextTick() // 确保DOM更新完成
+      return leafletMapRef.value.drawOnMap(text, type)
     } catch (e) {
       ElMessage.error('绘制失败: ' + e.message)
       return Promise.reject(e)
@@ -169,7 +177,8 @@ export function useMapOperations() {
   }
 
   const updateGeoJsonFromMap = () => {
-    console.log('updateGeoJsonFromMap called')
+    // 这里可以添加从地图更新GeoJSON的逻辑
+    console.log('地图几何已更新')
   }
 
   const handleSelectionChange = (selection) => {
@@ -179,7 +188,10 @@ export function useMapOperations() {
   const selectGeometryType = (type) => {
     try {
       const drawnItems = leafletMapRef.value?.getDrawnItems?.()
-      if (!drawnItems) return
+      if (!drawnItems) {
+        ElMessage.warning('地图未准备好')
+        return
+      }
 
       const newSelection = new Set()
 
@@ -218,11 +230,7 @@ export function useMapOperations() {
     }
   }
 
-  const setLeafletMapRef = (mapRef) => {
-    leafletMapRef.value = mapRef
-  }
-
-  // === 右键菜单操作 ===
+  // 右键菜单操作
   const showContextMenu = (point) => {
     contextMenuStyle.value = {
       position: 'fixed',
