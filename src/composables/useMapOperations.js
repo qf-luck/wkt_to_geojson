@@ -20,7 +20,15 @@ export function useMapOperations() {
   const selectedGeometryInfo = ref(null)
   const showCoordinateDetails = ref(false)
 
-  // 设置地图引用的方法 - 添加错误处理和延迟重试
+  // 添加一个响应式状态来强制刷新统计
+  const statsUpdateTrigger = ref(0)
+
+  // 强制更新统计的方法
+  const forceUpdateStats = () => {
+    statsUpdateTrigger.value++
+  }
+
+  // 设置地图引用的方法
   const setLeafletMapRef = async (mapRef) => {
     try {
       if (!mapRef) {
@@ -28,18 +36,14 @@ export function useMapOperations() {
         return
       }
 
-      // 如果引用是组件实例，获取实际的ref
       const actualRef = mapRef.value || mapRef
-
       leafletMapRef.value = actualRef
       console.log('地图引用设置成功:', actualRef)
 
-      // 验证地图引用是否有效
       if (actualRef && typeof actualRef.drawOnMap === 'function') {
         console.log('地图引用验证成功，功能可用')
       } else {
         console.warn('地图引用设置成功但功能不可用，稍后重试')
-        // 延迟重试
         setTimeout(() => {
           if (actualRef && typeof actualRef.drawOnMap === 'function') {
             console.log('延迟验证成功，地图功能现在可用')
@@ -95,6 +99,9 @@ export function useMapOperations() {
 
   // === 计算属性 ===
   const hasGeometry = computed(() => {
+    // 添加statsUpdateTrigger作为依赖来强制更新
+    statsUpdateTrigger.value
+
     try {
       const mapRef = leafletMapRef.value
       if (!mapRef || typeof mapRef.getDrawnItems !== 'function') {
@@ -110,6 +117,9 @@ export function useMapOperations() {
   })
 
   const geometryStats = computed(() => {
+    // 添加statsUpdateTrigger作为依赖来强制更新
+    statsUpdateTrigger.value
+
     const stats = {
       total: 0,
       points: 0,
@@ -123,11 +133,15 @@ export function useMapOperations() {
     try {
       const mapRef = leafletMapRef.value
       if (!mapRef || typeof mapRef.getDrawnItems !== 'function') {
+        console.log('地图引用无效或方法不存在')
         return stats
       }
 
       const drawnItems = mapRef.getDrawnItems()
-      if (!drawnItems) return stats
+      if (!drawnItems) {
+        console.log('drawnItems 为空')
+        return stats
+      }
 
       let totalLengthM = 0
       let totalAreaM2 = 0
@@ -139,31 +153,48 @@ export function useMapOperations() {
           const geojson = layer.toGeoJSON()
           const type = geojson.geometry.type
 
+          console.log(`处理图层类型: ${type}`)
+
           // 统计类型
           if (type === 'Point') {
             stats.points++
             allCoords.push(geojson.geometry.coordinates)
           } else if (type.includes('LineString')) {
             stats.lines++
-            const length = turf.length(geojson, { units: 'meters' })
-            totalLengthM += length
+            try {
+              const length = turf.length(geojson, { units: 'meters' })
+              totalLengthM += length
 
-            if (type === 'LineString') {
-              allCoords.push(...geojson.geometry.coordinates)
-            } else if (type === 'MultiLineString') {
-              geojson.geometry.coordinates.forEach((coords) => allCoords.push(...coords))
+              if (type === 'LineString') {
+                allCoords.push(...geojson.geometry.coordinates)
+              } else if (type === 'MultiLineString') {
+                geojson.geometry.coordinates.forEach((coords) => allCoords.push(...coords))
+              }
+            } catch (e) {
+              console.warn('计算线段长度失败:', e)
             }
           } else if (type.includes('Polygon')) {
             stats.polygons++
-            const area = turf.area(geojson)
-            totalAreaM2 += area
+            try {
+              // 特殊处理圆形
+              if (layer.getRadius && typeof layer.getRadius === 'function') {
+                const radius = layer.getRadius()
+                const area = Math.PI * radius * radius
+                totalAreaM2 += area
+              } else {
+                const area = turf.area(geojson)
+                totalAreaM2 += area
+              }
 
-            if (type === 'Polygon') {
-              geojson.geometry.coordinates.forEach((ring) => allCoords.push(...ring))
-            } else if (type === 'MultiPolygon') {
-              geojson.geometry.coordinates.forEach((polygon) =>
-                polygon.forEach((ring) => allCoords.push(...ring)),
-              )
+              if (type === 'Polygon') {
+                geojson.geometry.coordinates.forEach((ring) => allCoords.push(...ring))
+              } else if (type === 'MultiPolygon') {
+                geojson.geometry.coordinates.forEach((polygon) =>
+                  polygon.forEach((ring) => allCoords.push(...ring)),
+                )
+              }
+            } catch (e) {
+              console.warn('计算多边形面积失败:', e)
             }
           }
         } catch (e) {
@@ -189,6 +220,8 @@ export function useMapOperations() {
           console.warn('计算边界框失败:', e)
         }
       }
+
+      console.log('统计结果:', stats)
     } catch (e) {
       console.warn('计算统计信息失败:', e)
     }
@@ -210,8 +243,15 @@ export function useMapOperations() {
         return Promise.reject(new Error('地图功能未准备好'))
       }
 
-      await nextTick() // 确保DOM更新完成
-      return await mapRef.drawOnMap(text, type)
+      await nextTick()
+      const result = await mapRef.drawOnMap(text, type)
+
+      // 绘制完成后强制更新统计
+      setTimeout(() => {
+        forceUpdateStats()
+      }, 100)
+
+      return result
     } catch (e) {
       console.error('绘制失败:', e)
       ElMessage.error('绘制失败: ' + e.message)
@@ -220,12 +260,13 @@ export function useMapOperations() {
   }
 
   const updateGeoJsonFromMap = () => {
-    // 这里可以添加从地图更新GeoJSON的逻辑
     console.log('地图几何已更新')
+    forceUpdateStats() // 强制更新统计
   }
 
   const handleSelectionChange = (selection) => {
     selectedLayers.value = selection
+    forceUpdateStats() // 选择变化时也更新统计
   }
 
   const selectGeometryType = (type) => {
@@ -538,6 +579,7 @@ export function useMapOperations() {
     handleSelectionChange,
     selectGeometryType,
     setLeafletMapRef,
+    forceUpdateStats,
 
     // 右键菜单
     contextMenuVisible,
@@ -558,6 +600,6 @@ export function useMapOperations() {
     geometryInfoVisible,
     selectedGeometryInfo,
     showCoordinateDetails,
-    // getGeometryInfo,
+    getGeometryInfo,
   }
 }
