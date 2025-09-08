@@ -3,7 +3,7 @@
     id="map-container"
     ref="mapContainer"
     v-loading="loading"
-    :loading-text="'地图加载中...'"
+    loading-text="地图加载中..."
   ></div>
 </template>
 
@@ -18,7 +18,10 @@ import wellknown from 'wellknown'
 
 // Props
 const props = defineProps({
-  currentMapStyle: String,
+  currentMapStyle: {
+    type: String,
+    default: 'osm'
+  },
   loading: Boolean,
 })
 
@@ -38,249 +41,204 @@ let map = null
 let tileLayers = {}
 let drawnItems = null
 const selectedLayers = ref(new Set())
+let isInitialized = ref(false)
 
 // 修复 Leaflet 图标路径问题
 const fixLeafletIcons = () => {
-  delete L.Icon.Default.prototype._getIconUrl
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-    iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-  })
-}
-
-// 初始化地图
-const initMap = async () => {
-  await nextTick()
-
-  if (!mapContainer.value) {
-    ElMessage.error('地图容器未找到')
-    return
-  }
-
   try {
-    // 修复 Leaflet 图标问题
-    fixLeafletIcons()
-
-    // 清理可能存在的旧地图实例
-    if (map) {
-      map.remove()
-      map = null
-    }
-
-    // 确保容器有尺寸
-    if (mapContainer.value.offsetWidth === 0 || mapContainer.value.offsetHeight === 0) {
-      console.warn('地图容器尺寸为0，等待DOM更新')
-      await nextTick()
-    }
-
-    // 创建地图实例
-    map = L.map(mapContainer.value, {
-      center: [39.9042, 116.4074], // 北京天安门
-      zoom: 10,
-      zoomControl: true,
-      attributionControl: true,
-      preferCanvas: false, // 使用SVG渲染以获得更好的性能
-    })
-
-    // 初始化瓦片图层
-    tileLayers = {
-      osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        maxZoom: 19,
-        crossOrigin: true,
-      }),
-      light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
-        maxZoom: 19,
-        crossOrigin: true,
-      }),
-      dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
-        maxZoom: 19,
-        crossOrigin: true,
-      }),
-      satellite: L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        {
-          attribution: '&copy; <a href="https://www.esri.com/">Esri</a>',
-          maxZoom: 18,
-          crossOrigin: true,
-        },
-      ),
-    }
-
-    // 添加默认图层
-    const defaultLayer = tileLayers[props.currentMapStyle] || tileLayers.osm
-    defaultLayer.addTo(map)
-
-    // 创建绘图图层组
-    drawnItems = new L.FeatureGroup()
-    map.addLayer(drawnItems)
-
-    // 配置绘制控件
-    setupDrawControls()
-
-    // 设置地图事件
-    setupMapEvents()
-
-    // 地图准备就绪后的回调
-    map.whenReady(() => {
-      console.log('地图初始化完成')
-      // 强制刷新地图尺寸
-      setTimeout(() => {
-        if (map) {
-          map.invalidateSize()
-        }
-      }, 100)
-
-      ElMessage.success('地图加载完成')
-    })
-
-    // 监听地图加载错误
-    map.on('tileerror', (e) => {
-      console.warn('瓦片加载错误:', e)
-      ElMessage.warning('部分地图瓦片加载失败，可能影响显示效果')
+    delete L.Icon.Default.prototype._getIconUrl
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+      iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
     })
   } catch (error) {
-    console.error('地图初始化错误:', error)
-    ElMessage.error(`地图加载失败: ${error.message}`)
+    console.warn('修复Leaflet图标失败:', error)
+  }
+}
+
+// 初始化瓦片图层
+const initTileLayers = () => {
+  tileLayers = {
+    osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+      crossOrigin: true,
+      errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+    }),
+    light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+      maxZoom: 19,
+      crossOrigin: true,
+    }),
+    dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+      maxZoom: 19,
+      crossOrigin: true,
+    }),
+    satellite: L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: '&copy; <a href="https://www.esri.com/">Esri</a>',
+        maxZoom: 18,
+        crossOrigin: true,
+      },
+    ),
   }
 }
 
 // 配置绘制控件
 const setupDrawControls = () => {
-  const drawControl = new L.Control.Draw({
-    position: 'topleft',
-    edit: {
-      featureGroup: drawnItems,
-      remove: true,
+  try {
+    const drawControl = new L.Control.Draw({
+      position: 'topleft',
       edit: {
-        selectedPathOptions: {
-          maintainColor: true,
-          opacity: 0.3,
+        featureGroup: drawnItems,
+        remove: true,
+        edit: {
+          selectedPathOptions: {
+            maintainColor: true,
+            opacity: 0.3,
+          },
         },
       },
-    },
-    draw: {
-      polygon: {
-        allowIntersection: false,
-        drawError: {
-          color: '#e1e100',
-          message: '<strong>警告!</strong> 不能绘制自相交的多边形!',
+      draw: {
+        polygon: {
+          allowIntersection: false,
+          drawError: {
+            color: '#e1e100',
+            message: '<strong>警告!</strong> 不能绘制自相交的多边形!',
+          },
+          shapeOptions: {
+            color: '#3388ff',
+            weight: 2,
+            fillOpacity: 0.2,
+          },
         },
-        shapeOptions: {
-          color: '#3388ff',
-          weight: 2,
-          fillOpacity: 0.2,
+        polyline: {
+          shapeOptions: {
+            color: '#f357a1',
+            weight: 3,
+          },
         },
-      },
-      polyline: {
-        shapeOptions: {
-          color: '#f357a1',
-          weight: 3,
+        rectangle: {
+          shapeOptions: {
+            color: '#ed6a5a',
+            weight: 2,
+            fillOpacity: 0.2,
+          },
         },
-      },
-      rectangle: {
-        shapeOptions: {
-          color: '#ed6a5a',
-          weight: 2,
-          fillOpacity: 0.2,
+        circle: {
+          shapeOptions: {
+            color: '#9bc53d',
+            weight: 2,
+            fillOpacity: 0.2,
+          },
         },
-      },
-      circle: {
-        shapeOptions: {
-          color: '#9bc53d',
-          weight: 2,
-          fillOpacity: 0.2,
+        marker: {
+          icon: new L.Icon.Default(),
         },
+        circlemarker: false,
       },
-      marker: {
-        icon: new L.Icon.Default(),
-      },
-      circlemarker: false,
-    },
-  })
+    })
 
-  map.addControl(drawControl)
+    map.addControl(drawControl)
+  } catch (error) {
+    console.error('设置绘制控件失败:', error)
+    ElMessage.error('绘制工具初始化失败')
+  }
 }
 
 // 设置地图事件
 const setupMapEvents = () => {
-  // 绘制事件
-  map.on(L.Draw.Event.CREATED, (event) => {
-    const layer = event.layer
-    drawnItems.addLayer(layer)
-    setupLayerEvents(layer)
-    emit('geometry-updated')
-    ElMessage.success(`${getGeometryTypeName(event.layerType)}已添加`)
-  })
-
-  map.on(L.Draw.Event.EDITED, (event) => {
-    event.layers.eachLayer((layer) => {
+  try {
+    // 绘制事件
+    map.on(L.Draw.Event.CREATED, (event) => {
+      const layer = event.layer
+      drawnItems.addLayer(layer)
       setupLayerEvents(layer)
+      emit('geometry-updated')
+      ElMessage.success(`${getGeometryTypeName(event.layerType)}已添加`)
     })
-    emit('geometry-updated')
-    ElMessage.success('图形已编辑')
-  })
 
-  map.on(L.Draw.Event.DELETED, (event) => {
-    clearSelection()
-    emit('geometry-updated')
-    const count = Object.keys(event.layers._layers).length
-    ElMessage.success(`已删除${count}个图形`)
-  })
+    map.on(L.Draw.Event.EDITED, (event) => {
+      event.layers.eachLayer((layer) => {
+        setupLayerEvents(layer)
+      })
+      emit('geometry-updated')
+      ElMessage.success('图形已编辑')
+    })
 
-  // 地图事件
-  map.on('mousemove', (e) => {
-    const lat = e.latlng.lat.toFixed(6)
-    const lng = e.latlng.lng.toFixed(6)
-    emit('mouse-position-changed', `鼠标位置: ${lng}, ${lat}`)
-  })
+    map.on(L.Draw.Event.DELETED, (event) => {
+      clearSelection()
+      emit('geometry-updated')
+      const count = Object.keys(event.layers._layers).length
+      ElMessage.success(`已删除${count}个图形`)
+    })
 
-  map.on('click', () => {
-    clearSelection()
-  })
+    // 地图事件
+    map.on('mousemove', (e) => {
+      const lat = e.latlng.lat.toFixed(6)
+      const lng = e.latlng.lng.toFixed(6)
+      emit('mouse-position-changed', `鼠标位置: ${lng}, ${lat}`)
+    })
+
+    map.on('click', () => {
+      clearSelection()
+    })
+
+    // 错误处理
+    map.on('tileerror', (e) => {
+      console.warn('瓦片加载错误:', e)
+      // 静默处理，避免用户体验不佳
+    })
+  } catch (error) {
+    console.error('设置地图事件失败:', error)
+  }
 }
 
 // 设置图层事件
 const setupLayerEvents = (layer) => {
-  layer.off('click contextmenu')
+  try {
+    // 清除旧事件
+    layer.off('click contextmenu mouseover mouseout')
 
-  layer.on('click', (e) => {
-    L.DomEvent.stopPropagation(e)
+    layer.on('click', (e) => {
+      L.DomEvent.stopPropagation(e)
 
-    if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
-      toggleLayerSelection(layer)
-    } else {
-      clearSelection()
-      selectLayer(layer)
-    }
-  })
+      if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
+        toggleLayerSelection(layer)
+      } else {
+        clearSelection()
+        selectLayer(layer)
+      }
+    })
 
-  layer.on('contextmenu', (e) => {
-    L.DomEvent.stopPropagation(e)
+    layer.on('contextmenu', (e) => {
+      L.DomEvent.stopPropagation(e)
 
-    if (!selectedLayers.value.has(layer)) {
-      clearSelection()
-      selectLayer(layer)
-    }
-    emit('show-context-menu', e.containerPoint)
-  })
+      if (!selectedLayers.value.has(layer)) {
+        clearSelection()
+        selectLayer(layer)
+      }
+      emit('show-context-menu', e.containerPoint)
+    })
 
-  // 鼠标悬停效果
-  layer.on('mouseover', () => {
-    if (!selectedLayers.value.has(layer)) {
-      highlightLayer(layer, true, true)
-    }
-  })
+    // 鼠标悬停效果
+    layer.on('mouseover', () => {
+      if (!selectedLayers.value.has(layer)) {
+        highlightLayer(layer, true, true)
+      }
+    })
 
-  layer.on('mouseout', () => {
-    if (!selectedLayers.value.has(layer)) {
-      highlightLayer(layer, false)
-    }
-  })
+    layer.on('mouseout', () => {
+      if (!selectedLayers.value.has(layer)) {
+        highlightLayer(layer, false)
+      }
+    })
+  } catch (error) {
+    console.warn('设置图层事件失败:', error)
+  }
 }
 
 // 图层选择管理
@@ -314,29 +272,33 @@ const clearSelection = () => {
 
 // 图层高亮
 const highlightLayer = (layer, highlight, isHover = false) => {
-  let style
+  try {
+    let style
 
-  if (highlight) {
-    if (isHover) {
-      style = { color: '#ffa500', weight: 3, fillOpacity: 0.4 }
+    if (highlight) {
+      if (isHover) {
+        style = { color: '#ffa500', weight: 3, fillOpacity: 0.4 }
+      } else {
+        style = { color: '#ff4444', weight: 4, fillOpacity: 0.3 }
+      }
     } else {
-      style = { color: '#ff4444', weight: 4, fillOpacity: 0.3 }
+      // 恢复默认样式
+      if (layer instanceof L.Marker) {
+        return
+      } else if (layer instanceof L.Circle) {
+        style = { color: '#9bc53d', weight: 2, fillOpacity: 0.2 }
+      } else if (layer instanceof L.Polygon || layer instanceof L.Rectangle) {
+        style = { color: '#3388ff', weight: 2, fillOpacity: 0.2 }
+      } else {
+        style = { color: '#f357a1', weight: 3 }
+      }
     }
-  } else {
-    // 恢复默认样式
-    if (layer instanceof L.Marker) {
-      return
-    } else if (layer instanceof L.Circle) {
-      style = { color: '#9bc53d', weight: 2, fillOpacity: 0.2 }
-    } else if (layer instanceof L.Polygon || layer instanceof L.Rectangle) {
-      style = { color: '#3388ff', weight: 2, fillOpacity: 0.2 }
-    } else {
-      style = { color: '#f357a1', weight: 3 }
-    }
-  }
 
-  if (layer.setStyle) {
-    layer.setStyle(style)
+    if (layer.setStyle) {
+      layer.setStyle(style)
+    }
+  } catch (error) {
+    console.warn('设置图层样式失败:', error)
   }
 }
 
@@ -357,23 +319,119 @@ const switchTileLayer = (styleKey) => {
   if (!map || !tileLayers[styleKey]) return
 
   try {
+    // 移除当前图层
     Object.values(tileLayers).forEach((layer) => {
       if (map.hasLayer(layer)) map.removeLayer(layer)
     })
+
+    // 添加新图层
     tileLayers[styleKey].addTo(map)
-    ElMessage.success(
-      `已切换到${styleKey === 'osm' ? '标准' : styleKey === 'light' ? '简洁' : styleKey === 'dark' ? '暗色' : '卫星'}地图`,
-    )
+
+    const styleNames = {
+      osm: '标准',
+      light: '简洁',
+      dark: '暗色',
+      satellite: '卫星'
+    }
+
+    ElMessage.success(`已切换到${styleNames[styleKey] || styleKey}地图`)
   } catch (e) {
+    console.error('切换地图失败:', e)
     ElMessage.error('切换地图失败：' + e.message)
   }
 }
 
-// 在地图上绘制数据
-const drawOnMap = async (text, type) => {
-  if (!text || !map) {
-    ElMessage.warning('没有内容可以绘制或地图未准备好')
+// 初始化地图 - 增强版本
+const initMap = async () => {
+  // 防止重复初始化
+  if (isInitialized.value) {
+    console.warn('地图已经初始化，跳过重复初始化')
     return
+  }
+
+  try {
+    await nextTick()
+
+    if (!mapContainer.value) {
+      throw new Error('地图容器未找到')
+    }
+
+    // 修复 Leaflet 图标问题
+    fixLeafletIcons()
+
+    // 清理可能存在的旧地图实例
+    if (map) {
+      map.off() // 移除所有事件监听器
+      map.remove()
+      map = null
+    }
+
+    // 等待容器有正确的尺寸
+    let retries = 0
+    while ((mapContainer.value.offsetWidth === 0 || mapContainer.value.offsetHeight === 0) && retries < 20) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      retries++
+    }
+
+    if (mapContainer.value.offsetWidth === 0 || mapContainer.value.offsetHeight === 0) {
+      console.warn('地图容器尺寸为0，强制设置最小尺寸')
+      mapContainer.value.style.minHeight = '400px'
+      mapContainer.value.style.width = '100%'
+      await nextTick()
+    }
+
+    // 创建地图实例
+    map = L.map(mapContainer.value, {
+      center: [39.9042, 116.4074], // 北京天安门
+      zoom: 10,
+      zoomControl: true,
+      attributionControl: true,
+      preferCanvas: false,
+    })
+
+    // 初始化瓦片图层
+    initTileLayers()
+
+    // 添加默认图层
+    const defaultLayer = tileLayers[props.currentMapStyle] || tileLayers.osm
+    defaultLayer.addTo(map)
+
+    // 创建绘图图层组
+    drawnItems = new L.FeatureGroup()
+    map.addLayer(drawnItems)
+
+    // 配置绘制控件
+    setupDrawControls()
+
+    // 设置地图事件
+    setupMapEvents()
+
+    // 标记为已初始化
+    isInitialized.value = true
+
+    // 地图准备就绪
+    map.whenReady(() => {
+      console.log('地图初始化完成')
+      setTimeout(() => {
+        if (map) {
+          map.invalidateSize()
+        }
+      }, 100)
+      ElMessage.success('地图加载完成')
+    })
+
+  } catch (error) {
+    console.error('地图初始化错误:', error)
+    ElMessage.error(`地图加载失败: ${error.message}`)
+    isInitialized.value = false
+  }
+}
+
+// 在地图上绘制数据 - 增强错误处理
+const drawOnMap = async (text, type) => {
+  if (!text || !map || !isInitialized.value) {
+    ElMessage.warning('地图未准备好或没有内容可以绘制')
+    return Promise.reject(new Error('地图未准备好'))
   }
 
   try {
@@ -466,9 +524,11 @@ const drawOnMap = async (text, type) => {
     }
 
     ElMessage.success(`已在地图上显示${drawnItems.getLayers().length}个图形`)
+    return Promise.resolve()
   } catch (e) {
     console.error('绘制到地图失败:', e)
     ElMessage.error('数据格式错误：' + e.message)
+    return Promise.reject(e)
   }
 }
 
@@ -500,17 +560,22 @@ const zoomToFit = () => {
 watch(
   () => props.currentMapStyle,
   (newStyle) => {
-    if (newStyle) {
+    if (newStyle && isInitialized.value) {
       switchTileLayer(newStyle)
     }
   },
 )
 
 // 生命周期
-onMounted(initMap)
+onMounted(() => {
+  // 延迟初始化，确保DOM完全渲染
+  setTimeout(initMap, 100)
+})
 
 onUnmounted(() => {
+  isInitialized.value = false
   if (map) {
+    map.off() // 清理所有事件监听器
     map.remove()
     map = null
   }
@@ -524,6 +589,7 @@ defineExpose({
   zoomToFit,
   getSelectedLayers: () => selectedLayers.value,
   getDrawnItems: () => drawnItems,
+  isInitialized: () => isInitialized.value,
 })
 </script>
 
@@ -536,6 +602,7 @@ defineExpose({
   border: 2px solid #e4e7ed;
   box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.1);
   position: relative;
+  min-height: 400px; /* 确保最小高度 */
 }
 
 /* 响应式设计 */

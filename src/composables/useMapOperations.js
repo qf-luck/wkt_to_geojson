@@ -199,14 +199,21 @@ export function useMapOperations() {
   // 地图操作方法
   const drawOnMap = async (text, type) => {
     try {
-      if (!leafletMapRef.value?.drawOnMap) {
-        ElMessage.warning('地图未准备好')
-        return Promise.reject(new Error('地图未准备好'))
+      const mapRef = leafletMapRef.value
+      if (!mapRef) {
+        ElMessage.warning('地图引用未设置，请稍后重试')
+        return Promise.reject(new Error('地图引用未设置'))
+      }
+
+      if (typeof mapRef.drawOnMap !== 'function') {
+        ElMessage.warning('地图功能未准备好，请稍后重试')
+        return Promise.reject(new Error('地图功能未准备好'))
       }
 
       await nextTick() // 确保DOM更新完成
-      return leafletMapRef.value.drawOnMap(text, type)
+      return await mapRef.drawOnMap(text, type)
     } catch (e) {
+      console.error('绘制失败:', e)
       ElMessage.error('绘制失败: ' + e.message)
       return Promise.reject(e)
     }
@@ -232,33 +239,39 @@ export function useMapOperations() {
       const newSelection = new Set()
 
       drawnItems.eachLayer((layer) => {
-        const geojson = layer.toGeoJSON()
-        const geometryType = geojson.geometry.type
+        try {
+          const geojson = layer.toGeoJSON()
+          const geometryType = geojson.geometry.type
 
-        let shouldSelect = false
-        switch (type) {
-          case 'points':
-            shouldSelect = geometryType === 'Point'
-            break
-          case 'lines':
-            shouldSelect = geometryType.includes('LineString')
-            break
-          case 'polygons':
-            shouldSelect = geometryType.includes('Polygon')
-            break
-          case 'total':
-            shouldSelect = true
-            break
-        }
+          let shouldSelect = false
+          switch (type) {
+            case 'points':
+              shouldSelect = geometryType === 'Point'
+              break
+            case 'lines':
+              shouldSelect = geometryType.includes('LineString')
+              break
+            case 'polygons':
+              shouldSelect = geometryType.includes('Polygon')
+              break
+            case 'total':
+              shouldSelect = true
+              break
+          }
 
-        if (shouldSelect) {
-          newSelection.add(layer)
+          if (shouldSelect) {
+            newSelection.add(layer)
+          }
+        } catch (e) {
+          console.warn('处理图层失败:', e)
         }
       })
 
       selectedLayers.value = newSelection
       if (newSelection.size > 0) {
         ElMessage.success(`已选中${newSelection.size}个${type === 'total' ? '图形' : type}`)
+      } else {
+        ElMessage.info(`没有找到${type === 'total' ? '图形' : type}`)
       }
     } catch (e) {
       console.warn('选择几何图形失败:', e)
@@ -545,6 +558,6 @@ export function useMapOperations() {
     geometryInfoVisible,
     selectedGeometryInfo,
     showCoordinateDetails,
-    getGeometryInfo,
+    // getGeometryInfo,
   }
 }
