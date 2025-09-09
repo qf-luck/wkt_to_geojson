@@ -612,48 +612,4 @@ defineExpose({
   }
 }
 
-/* Leaflet Draw 工具栏样式优化 */
-:deep(.leaflet-draw-toolbar) {
-  margin-left: 12px !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-:deep(.leaflet-draw-toolbar a) {
-  width: 34px !important;
-  height: 34px !important;
-  line-height: 34px !important;
-  display: block !important;
-  text-align: center !important;
-  text-decoration: none !important;
-  background: white !important;
-  border: 1px solid #ddd !important;
-  transition: all 0.2s ease !important;
-}
-
-:deep(.leaflet-draw-toolbar a:hover) {
-  background-color: #f0f9ff !important;
-  border-color: #409eff !important;
-  transform: scale(1.05);
-}
-
-:deep(.leaflet-draw-toolbar a.leaflet-draw-toolbar-button-enabled) {
-  background: linear-gradient(135deg, #409eff 0%, #1976d2 100%) !important;
-  border-color: #1976d2 !important;
-  color: white !important;
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3) !important;
-}
-
-/* 绘制提示框样式 */
-:deep(.leaflet-draw-tooltip) {
-  background: rgba(0, 0, 0, 0.85) !important;
-  color: white !important;
-  border-radius: 6px !important;
-  padding: 8px 12px !important;
-  font-size: 13px !important;
-  border: none !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
-  backdrop-filter: blur(10px) !important;
-}
 </style>
