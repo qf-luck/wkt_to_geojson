@@ -303,30 +303,58 @@ const setupLayerEvents = (layer) => {
 const setupMapEvents = () => {
   // 绘制事件
   map.on(L.Draw.Event.CREATED, (event) => {
-    const layer = event.layer
-    const type = event.layerType
-
-    // 特殊处理矩形类型
-    let geometry = layer.toGeoJSON().geometry
-    if (type === 'rectangle' && layer.getBounds) {
-      // 确保矩形正确转换为多边形几何体
-      const bounds = layer.getBounds()
-      const ne = bounds.getNorthEast()
-      const sw = bounds.getSouthWest()
-      const nw = L.latLng(ne.lat, sw.lng)
-      const se = L.latLng(sw.lat, ne.lng)
+    try {
+      const layer = event.layer
+      const type = event.layerType || 'unknown'
       
-      geometry = {
-        type: 'Polygon',
-        coordinates: [[
-          [sw.lng, sw.lat],
-          [se.lng, se.lat],
-          [ne.lng, ne.lat],
-          [nw.lng, nw.lat],
-          [sw.lng, sw.lat]
-        ]]
+      console.log('绘制事件:', { layer, type, event })
+
+      // 特殊处理矩形类型
+      let geometry
+      try {
+        geometry = layer.toGeoJSON().geometry
+      } catch (geoError) {
+        console.warn('获取GeoJSON失败:', geoError)
+        // 为矩形创建默认几何体
+        if (type === 'rectangle' && layer.getBounds) {
+          const bounds = layer.getBounds()
+          const ne = bounds.getNorthEast()
+          const sw = bounds.getSouthWest()
+          geometry = {
+            type: 'Polygon',
+            coordinates: [[
+              [sw.lng, sw.lat],
+              [ne.lng, sw.lat],
+              [ne.lng, ne.lat],
+              [sw.lng, ne.lat],
+              [sw.lng, sw.lat]
+            ]]
+          }
+        } else {
+          console.error('无法处理图层几何体')
+          return
+        }
       }
-    }
+      
+      if (type === 'rectangle' && layer.getBounds) {
+        // 确保矩形正确转换为多边形几何体
+        const bounds = layer.getBounds()
+        const ne = bounds.getNorthEast()
+        const sw = bounds.getSouthWest()
+        const nw = L.latLng(ne.lat, sw.lng)
+        const se = L.latLng(sw.lat, ne.lng)
+        
+        geometry = {
+          type: 'Polygon',
+          coordinates: [[
+            [sw.lng, sw.lat],
+            [se.lng, se.lat],
+            [ne.lng, ne.lat],
+            [nw.lng, nw.lat],
+            [sw.lng, sw.lat]
+          ]]
+        }
+      }
 
     // 设置图层属性
     layer.feature = {
@@ -346,12 +374,16 @@ const setupMapEvents = () => {
     setupLayerEvents(layer)
     emit('geometry-updated')
 
-    ElNotification({
-      title: '创建成功',
-      message: `${getGeometryTypeName(type)}已添加`,
-      type: 'success',
-      duration: 2000
-    })
+      ElNotification({
+        title: '创建成功',
+        message: `${getGeometryTypeName(type)}已添加`,
+        type: 'success',
+        duration: 2000
+      })
+    } catch (error) {
+      console.error('绘制事件处理失败:', error)
+      ElMessage.error('创建图形失败: ' + error.message)
+    }
   })
 
   map.on(L.Draw.Event.EDITED, (event) => {
