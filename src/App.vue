@@ -1,3 +1,4 @@
+<!-- src/App.vue - 优化版本 -->
 <template>
   <div class="app-container">
     <!-- 头部 -->
@@ -15,7 +16,7 @@
         :drawingOnMap="drawingOnMap"
         @convert-geojson-to-wkt="convertGeoJsonToWkt"
         @convert-wkt-to-geojson="convertWktToGeoJson"
-        @draw-on-map="drawOnMap"
+        @draw-on-map="handleDrawOnMap"
         @validate-geometry="validateGeometry"
         @simplify-geometry="simplifyGeometry"
       />
@@ -29,15 +30,19 @@
         :totalArea="totalArea"
         :hasGeometry="hasGeometry"
         :mapLoading="mapLoading"
+        :geometryStats="geometryStats"
         @style-change="currentMapStyle = $event"
-        @geometry-updated="updateGeoJsonFromMap"
+        @geometry-updated="handleGeometryUpdated"
         @selection-changed="handleSelectionChange"
         @mouse-position-changed="mousePosition = $event"
         @show-context-menu="showContextMenu"
       />
 
       <!-- 数据统计面板 -->
-      <StatsSection :geometryStats="geometryStats" @select-geometry-type="selectGeometryType" />
+      <StatsSection
+        :geometryStats="geometryStats"
+        @select-geometry-type="selectGeometryType"
+      />
 
       <!-- 右键菜单 -->
       <ContextMenu
@@ -65,14 +70,15 @@
         @toggle-coordinate-details="showCoordinateDetails = !showCoordinateDetails"
       />
 
-      <!-- 加载指示器 -->
+      <!-- 全局加载指示器 -->
       <LoadingOverlay v-if="globalLoading" :message="loadingMessage" />
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch, nextTick } from 'vue'
+import { computed, onMounted, ref, onUnmounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import HeaderSection from './components/HeaderSection.vue'
 import ConverterSection from './components/ConverterSection.vue'
 import MapSection from './components/MapSection.vue'
@@ -85,7 +91,7 @@ import { useMapOperations } from './composables/useMapOperations'
 import { useValidation } from './composables/useValidation'
 import * as turf from '@turf/turf'
 
-// 组合函数
+// === 组合函数 ===
 const {
   geojsonText,
   wktText,
@@ -96,7 +102,7 @@ const {
   convertGeoJsonToWkt,
   convertWktToGeoJson,
   validateGeometry,
-  simplifyGeometry,
+  simplifyGeometry
 } = useGeometry()
 
 const {
@@ -106,11 +112,10 @@ const {
   mapLoading,
   hasGeometry,
   geometryStats,
-  drawOnMap,
   updateGeoJsonFromMap,
-  selectGeometryType,
   handleSelectionChange,
-  // 右键菜单相关
+  selectGeometryType,
+  // 右键菜单
   contextMenuVisible,
   contextMenuStyle,
   showContextMenu,
@@ -124,94 +129,37 @@ const {
   unionSelected,
   bufferSelected,
   convexHull,
-  // 几何信息相关
+  // 几何信息
   geometryInfoVisible,
   selectedGeometryInfo,
   showCoordinateDetails,
   getGeometryInfo,
   setLeafletMapRef,
+  cleanup
 } = useMapOperations()
 
 const { geojsonError, wktError } = useValidation(geojsonText, wktText)
 
-// 地图组件引用
+// === 组件引用 ===
 const mapSectionRef = ref(null)
 
-// 计算面积的辅助函数
-const calculateArea = (layer) => {
-  try {
-    const geojson = layer.toGeoJSON()
-    if (!geojson.geometry.type.includes('Polygon')) {
-      return null
-    }
-
-    let area
-    if (layer.getRadius && typeof layer.getRadius === 'function') {
-      // 圆形面积计算
-      const radius = layer.getRadius()
-      area = Math.PI * radius * radius
-    } else {
-      area = turf.area(geojson)
-    }
-
-    // 格式化面积
-    if (area < 10000) {
-      return `${area.toFixed(2)} m²`
-    } else if (area < 1000000) {
-      return `${(area / 10000).toFixed(2)} 公顷`
-    } else {
-      return `${(area / 1000000).toFixed(2)} km²`
-    }
-  } catch (e) {
-    console.warn('计算面积失败:', e)
-    return null
-  }
-}
-
-// 设置地图引用 - 使用 watch 监听组件挂载
-watch(
-  mapSectionRef,
-  async (newRef) => {
-    if (newRef?.leafletMapRef) {
-      await nextTick()
-      try {
-        setLeafletMapRef(newRef.leafletMapRef)
-      } catch (error) {
-        console.warn('设置地图引用失败:', error)
-      }
-    }
-  },
-  { immediate: true },
-)
-
-// 也在 onMounted 中尝试设置
-onMounted(async () => {
-  await nextTick()
-  if (mapSectionRef.value?.leafletMapRef) {
-    try {
-      setLeafletMapRef(mapSectionRef.value.leafletMapRef)
-    } catch (error) {
-      console.warn('挂载时设置地图引用失败:', error)
-    }
-  }
-})
-
-// 计算属性
+// === 计算属性 ===
 const selectionInfo = computed(() => {
   const count = selectedLayers.value.size
   if (count === 0) return '选中: --'
+
   let info = `选中: ${count}个图形`
+
   if (count === 1) {
     try {
       const layer = Array.from(selectedLayers.value)[0]
-      const area = calculateArea(layer)
-      if (area) {
-        info += ` | 面积: ${area}`
-      }
-    } catch (e) {
-      console.warn('计算选中图形面积失败:', e)
+      const area = calculateLayerArea(layer)
+      if (area) info += ` | 面积: ${area}`
+    } catch (error) {
+      console.warn('计算选中图形面积失败:', error)
     }
   }
+
   return info
 })
 
@@ -220,10 +168,12 @@ const totalArea = computed(() => {
 
   try {
     let totalAreaM2 = 0
-    selectedLayers.value.forEach((layer) => {
+
+    selectedLayers.value.forEach(layer => {
       const geojson = layer.toGeoJSON()
       if (geojson.geometry.type.includes('Polygon')) {
         if (layer.getRadius && typeof layer.getRadius === 'function') {
+          // 圆形面积
           const radius = layer.getRadius()
           totalAreaM2 += Math.PI * radius * radius
         } else {
@@ -233,19 +183,108 @@ const totalArea = computed(() => {
     })
 
     if (totalAreaM2 > 0) {
-      if (totalAreaM2 < 10000) {
-        return `${totalAreaM2.toFixed(2)} m²`
-      } else if (totalAreaM2 < 1000000) {
-        return `${(totalAreaM2 / 10000).toFixed(2)} 公顷`
-      } else {
-        return `${(totalAreaM2 / 1000000).toFixed(2)} km²`
-      }
+      return formatArea(totalAreaM2)
     }
-  } catch (e) {
-    console.warn('计算总面积失败:', e)
+  } catch (error) {
+    console.warn('计算总面积失败:', error)
   }
 
   return null
+})
+
+// === 工具函数 ===
+const formatArea = (squareMeters) => {
+  if (squareMeters < 10000) return `${squareMeters.toFixed(2)} m²`
+  if (squareMeters < 1000000) return `${(squareMeters / 10000).toFixed(2)} 公顷`
+  return `${(squareMeters / 1000000).toFixed(2)} km²`
+}
+
+const calculateLayerArea = (layer) => {
+  try {
+    const geojson = layer.toGeoJSON()
+    if (!geojson.geometry.type.includes('Polygon')) return null
+
+    let area
+    if (layer.getRadius && typeof layer.getRadius === 'function') {
+      const radius = layer.getRadius()
+      area = Math.PI * radius * radius
+    } else {
+      area = turf.area(geojson)
+    }
+
+    return formatArea(area)
+  } catch (error) {
+    console.warn('计算面积失败:', error)
+    return null
+  }
+}
+
+// === 事件处理 ===
+const handleDrawOnMap = async (text, type) => {
+  if (!mapSectionRef.value) {
+    ElMessage.warning('地图未准备好')
+    return
+  }
+
+  drawingOnMap.value = true
+
+  try {
+    await mapSectionRef.value.drawOnMap(text, type)
+    ElMessage.success('已显示到地图')
+  } catch (error) {
+    console.error('绘制到地图失败:', error)
+    ElMessage.error('绘制失败: ' + error.message)
+  } finally {
+    drawingOnMap.value = false
+  }
+}
+
+const handleGeometryUpdated = () => {
+  updateGeoJsonFromMap()
+}
+
+// === 组件引用设置 ===
+const setupMapReference = () => {
+  if (mapSectionRef.value?.leafletMapRef) {
+    setLeafletMapRef(mapSectionRef.value.leafletMapRef)
+  }
+}
+
+// === 生命周期 ===
+onMounted(() => {
+  // 延迟设置地图引用，确保所有组件都已挂载
+  setTimeout(setupMapReference, 500)
+
+  // 定期检查地图引用，确保连接正常
+  const checkInterval = setInterval(() => {
+    if (mapSectionRef.value?.leafletMapRef) {
+      setLeafletMapRef(mapSectionRef.value.leafletMapRef)
+      clearInterval(checkInterval)
+    }
+  }, 1000)
+
+  // 10秒后停止检查
+  setTimeout(() => clearInterval(checkInterval), 10000)
+})
+
+onUnmounted(() => {
+  cleanup()
+})
+
+// 全局错误处理
+window.addEventListener('error', (event) => {
+  console.error('全局错误:', event.error)
+  if (event.error?.message?.includes('Leaflet') || event.error?.message?.includes('map')) {
+    ElMessage.error('地图操作出现错误，请刷新页面重试')
+  }
+})
+
+// 全局未处理Promise错误
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('未处理的Promise错误:', event.reason)
+  if (event.reason?.message?.includes('地图') || event.reason?.message?.includes('map')) {
+    ElMessage.warning('地图操作失败，请重试')
+  }
 })
 </script>
 
@@ -262,12 +301,62 @@ const totalArea = computed(() => {
   max-width: 1400px;
   margin: 0 auto;
   padding: 0 20px;
+  position: relative;
 }
 
 /* 响应式设计 */
 @media (max-width: 768px) {
   .main-content {
     padding: 0 12px;
+  }
+}
+
+/* 深色模式适配 */
+@media (prefers-color-scheme: dark) {
+  .app-container {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  }
+}
+
+/* 加载动画 */
+@keyframes appLoad {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.app-container {
+  animation: appLoad 0.6s ease-out;
+}
+
+/* 无障碍优化 */
+@media (prefers-reduced-motion: reduce) {
+  .app-container {
+    animation: none !important;
+  }
+
+  * {
+    transition: none !important;
+  }
+}
+
+/* 打印样式 */
+@media print {
+  .app-container {
+    background: white !important;
+    color: black !important;
+  }
+
+  /* 隐藏不必要的元素 */
+  .loading-overlay,
+  .context-menu,
+  button {
+    display: none !important;
   }
 }
 </style>

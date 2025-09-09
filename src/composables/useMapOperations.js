@@ -1,214 +1,155 @@
-import { computed, ref, nextTick } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+// src/composables/useMapOperations.js - 优化版本
+import { computed, ref, nextTick, watch } from 'vue'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import * as turf from '@turf/turf'
 import wellknown from 'wellknown'
 
 export function useMapOperations() {
-  // === 响应式状态定义 ===
+  // === 核心状态 ===
   const leafletMapRef = ref(null)
   const currentMapStyle = ref('osm')
-  const mousePosition = ref('鼠标位置: --')
+  const mousePosition = ref('经度: --, 纬度: --')
   const selectedLayers = ref(new Set())
   const mapLoading = ref(false)
 
-  // 右键菜单相关
+  // 右键菜单
   const contextMenuVisible = ref(false)
   const contextMenuStyle = ref({})
 
-  // 几何信息对话框相关
+  // 几何信息对话框
   const geometryInfoVisible = ref(false)
   const selectedGeometryInfo = ref(null)
   const showCoordinateDetails = ref(false)
 
-  // 添加一个响应式状态来强制刷新统计
-  const statsUpdateTrigger = ref(0)
+  // 统计更新触发器
+  const statsVersion = ref(0)
 
-  // 强制更新统计的方法
-  const forceUpdateStats = () => {
-    statsUpdateTrigger.value++
+  // === 工具函数 ===
+  const formatLength = (meters) => {
+    if (meters < 1000) return `${meters.toFixed(2)} m`
+    return `${(meters / 1000).toFixed(2)} km`
   }
 
-  // 设置地图引用的方法
-  const setLeafletMapRef = async (mapRef) => {
+  const formatArea = (squareMeters) => {
+    if (squareMeters < 10000) return `${squareMeters.toFixed(2)} m²`
+    if (squareMeters < 1000000) return `${(squareMeters / 10000).toFixed(2)} 公顷`
+    return `${(squareMeters / 1000000).toFixed(2)} km²`
+  }
+
+  const getGeometryTypeName = (type) => {
+    const typeNames = {
+      polygon: '多边形', polyline: '线段', rectangle: '矩形',
+      circle: '圆形', marker: '标记点', point: '点',
+      linestring: '线段', multipolygon: '多多边形'
+    }
+    return typeNames[type?.toLowerCase()] || '图形'
+  }
+
+  // === 地图引用管理 ===
+  const setLeafletMapRef = (mapRef) => {
     try {
-      if (!mapRef) {
-        console.warn('地图引用为空')
-        return
-      }
-
-      const actualRef = mapRef.value || mapRef
-      leafletMapRef.value = actualRef
-      console.log('地图引用设置成功:', actualRef)
-
-      if (actualRef && typeof actualRef.drawOnMap === 'function') {
-        console.log('地图引用验证成功，功能可用')
-      } else {
-        console.warn('地图引用设置成功但功能不可用，稍后重试')
-        setTimeout(() => {
-          if (actualRef && typeof actualRef.drawOnMap === 'function') {
-            console.log('延迟验证成功，地图功能现在可用')
-          }
-        }, 1000)
+      leafletMapRef.value = mapRef?.value || mapRef
+      if (leafletMapRef.value) {
+        console.log('地图引用设置成功')
+        // 触发统计更新
+        updateStats()
       }
     } catch (error) {
       console.error('设置地图引用失败:', error)
     }
   }
 
-  // 工具函数
-  const formatLength = (meters) => {
-    if (meters < 1000) {
-      return `${meters.toFixed(2)} m`
-    } else {
-      return `${(meters / 1000).toFixed(2)} km`
-    }
+  // === 统计计算 ===
+  const updateStats = () => {
+    statsVersion.value++
   }
 
-  const formatArea = (squareMeters) => {
-    if (squareMeters < 10000) {
-      return `${squareMeters.toFixed(2)} m²`
-    } else if (squareMeters < 1000000) {
-      return `${(squareMeters / 10000).toFixed(2)} 公顷`
-    } else {
-      return `${(squareMeters / 1000000).toFixed(2)} km²`
-    }
-  }
-
-  const calculateArea = (layer) => {
+  const calculateLayerStats = (layer) => {
     try {
       const geojson = layer.toGeoJSON()
-      if (!geojson.geometry.type.includes('Polygon') && !geojson.geometry.type.includes('Circle')) {
-        return null
+      const type = geojson.geometry.type
+      const stats = { type, area: null, length: null }
+
+      // 计算面积
+      if (type.includes('Polygon')) {
+        if (layer.getRadius && typeof layer.getRadius === 'function') {
+          // 圆形
+          const radius = layer.getRadius()
+          stats.area = Math.PI * radius * radius
+        } else {
+          stats.area = turf.area(geojson)
+        }
       }
 
-      let area
-      if (layer.getRadius && typeof layer.getRadius === 'function') {
-        // 圆形面积计算
-        const radius = layer.getRadius()
-        area = Math.PI * radius * radius
-      } else {
-        area = turf.area(geojson)
+      // 计算长度
+      if (type.includes('LineString')) {
+        stats.length = turf.length(geojson, { units: 'meters' })
       }
 
-      return formatArea(area)
-    } catch (e) {
-      console.warn('计算面积失败:', e)
-      return null
+      return stats
+    } catch (error) {
+      console.warn('计算图层统计失败:', error)
+      return { type: 'unknown', area: null, length: null }
     }
   }
 
   // === 计算属性 ===
   const hasGeometry = computed(() => {
-    // 添加statsUpdateTrigger作为依赖来强制更新
-    statsUpdateTrigger.value
+    // 依赖统计版本来触发更新
+    statsVersion.value
 
     try {
-      const mapRef = leafletMapRef.value
-      if (!mapRef || typeof mapRef.getDrawnItems !== 'function') {
-        return false
-      }
-
-      const drawnItems = mapRef.getDrawnItems()
+      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
       return drawnItems && drawnItems.getLayers().length > 0
-    } catch (e) {
-      console.warn('检查几何存在性失败:', e)
+    } catch (error) {
       return false
     }
   })
 
   const geometryStats = computed(() => {
-    // 添加statsUpdateTrigger作为依赖来强制更新
-    statsUpdateTrigger.value
+    // 依赖统计版本来触发更新
+    statsVersion.value
 
     const stats = {
-      total: 0,
-      points: 0,
-      lines: 0,
-      polygons: 0,
-      totalLength: null,
-      totalArea: null,
-      boundingBox: null,
+      total: 0, points: 0, lines: 0, polygons: 0,
+      totalLength: null, totalArea: null, boundingBox: null
     }
 
     try {
-      const mapRef = leafletMapRef.value
-      if (!mapRef || typeof mapRef.getDrawnItems !== 'function') {
-        console.log('地图引用无效或方法不存在')
-        return stats
-      }
+      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
+      if (!drawnItems) return stats
 
-      const drawnItems = mapRef.getDrawnItems()
-      if (!drawnItems) {
-        console.log('drawnItems 为空')
-        return stats
-      }
-
-      let totalLengthM = 0
-      let totalAreaM2 = 0
-      let allCoords = []
+      let totalLengthM = 0, totalAreaM2 = 0
+      const allCoords = []
 
       drawnItems.eachLayer((layer) => {
         stats.total++
+        const layerStats = calculateLayerStats(layer)
+
+        // 分类统计
+        if (layerStats.type === 'Point') {
+          stats.points++
+        } else if (layerStats.type.includes('LineString')) {
+          stats.lines++
+          if (layerStats.length) totalLengthM += layerStats.length
+        } else if (layerStats.type.includes('Polygon')) {
+          stats.polygons++
+          if (layerStats.area) totalAreaM2 += layerStats.area
+        }
+
+        // 收集坐标用于计算边界框
         try {
           const geojson = layer.toGeoJSON()
-          const type = geojson.geometry.type
-
-          console.log(`处理图层类型: ${type}`)
-
-          // 统计类型
-          if (type === 'Point') {
-            stats.points++
-            allCoords.push(geojson.geometry.coordinates)
-          } else if (type.includes('LineString')) {
-            stats.lines++
-            try {
-              const length = turf.length(geojson, { units: 'meters' })
-              totalLengthM += length
-
-              if (type === 'LineString') {
-                allCoords.push(...geojson.geometry.coordinates)
-              } else if (type === 'MultiLineString') {
-                geojson.geometry.coordinates.forEach((coords) => allCoords.push(...coords))
-              }
-            } catch (e) {
-              console.warn('计算线段长度失败:', e)
-            }
-          } else if (type.includes('Polygon')) {
-            stats.polygons++
-            try {
-              // 特殊处理圆形
-              if (layer.getRadius && typeof layer.getRadius === 'function') {
-                const radius = layer.getRadius()
-                const area = Math.PI * radius * radius
-                totalAreaM2 += area
-              } else {
-                const area = turf.area(geojson)
-                totalAreaM2 += area
-              }
-
-              if (type === 'Polygon') {
-                geojson.geometry.coordinates.forEach((ring) => allCoords.push(...ring))
-              } else if (type === 'MultiPolygon') {
-                geojson.geometry.coordinates.forEach((polygon) =>
-                  polygon.forEach((ring) => allCoords.push(...ring)),
-                )
-              }
-            } catch (e) {
-              console.warn('计算多边形面积失败:', e)
-            }
-          }
+          const coords = turf.coordAll(geojson)
+          allCoords.push(...coords)
         } catch (e) {
-          console.warn('统计几何信息失败:', e)
+          console.warn('提取坐标失败:', e)
         }
       })
 
-      // 格式化长度和面积
-      if (totalLengthM > 0) {
-        stats.totalLength = formatLength(totalLengthM)
-      }
-      if (totalAreaM2 > 0) {
-        stats.totalArea = formatArea(totalAreaM2)
-      }
+      // 格式化总计
+      if (totalLengthM > 0) stats.totalLength = formatLength(totalLengthM)
+      if (totalAreaM2 > 0) stats.totalArea = formatArea(totalAreaM2)
 
       // 计算边界框
       if (allCoords.length > 0) {
@@ -220,113 +161,85 @@ export function useMapOperations() {
           console.warn('计算边界框失败:', e)
         }
       }
-
-      console.log('统计结果:', stats)
-    } catch (e) {
-      console.warn('计算统计信息失败:', e)
+    } catch (error) {
+      console.error('计算统计失败:', error)
     }
 
     return stats
   })
 
-  // 地图操作方法
+  // === 地图操作 ===
   const drawOnMap = async (text, type) => {
+    if (!leafletMapRef.value?.drawOnMap) {
+      ElMessage.warning('地图未准备好')
+      return Promise.reject(new Error('地图未准备好'))
+    }
+
     try {
-      const mapRef = leafletMapRef.value
-      if (!mapRef) {
-        ElMessage.warning('地图引用未设置，请稍后重试')
-        return Promise.reject(new Error('地图引用未设置'))
-      }
-
-      if (typeof mapRef.drawOnMap !== 'function') {
-        ElMessage.warning('地图功能未准备好，请稍后重试')
-        return Promise.reject(new Error('地图功能未准备好'))
-      }
-
-      await nextTick()
-      const result = await mapRef.drawOnMap(text, type)
-
-      // 绘制完成后强制更新统计
-      setTimeout(() => {
-        forceUpdateStats()
-      }, 100)
-
-      return result
-    } catch (e) {
-      console.error('绘制失败:', e)
-      ElMessage.error('绘制失败: ' + e.message)
-      return Promise.reject(e)
+      await leafletMapRef.value.drawOnMap(text, type)
+      // 绘制完成后更新统计
+      setTimeout(updateStats, 100)
+      return Promise.resolve()
+    } catch (error) {
+      ElMessage.error('绘制失败: ' + error.message)
+      return Promise.reject(error)
     }
   }
 
   const updateGeoJsonFromMap = () => {
-    console.log('地图几何已更新')
-    forceUpdateStats() // 强制更新统计
+    updateStats()
   }
 
   const handleSelectionChange = (selection) => {
     selectedLayers.value = selection
-    forceUpdateStats() // 选择变化时也更新统计
+    updateStats()
   }
 
   const selectGeometryType = (type) => {
-    try {
-      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
-      if (!drawnItems) {
-        ElMessage.warning('地图未准备好')
-        return
-      }
+    const drawnItems = leafletMapRef.value?.getDrawnItems?.()
+    if (!drawnItems) {
+      ElMessage.warning('地图未准备好')
+      return
+    }
 
-      const newSelection = new Set()
+    const newSelection = new Set()
 
-      drawnItems.eachLayer((layer) => {
-        try {
-          const geojson = layer.toGeoJSON()
-          const geometryType = geojson.geometry.type
+    drawnItems.eachLayer((layer) => {
+      try {
+        const geojson = layer.toGeoJSON()
+        const geometryType = geojson.geometry.type
 
-          let shouldSelect = false
-          switch (type) {
-            case 'points':
-              shouldSelect = geometryType === 'Point'
-              break
-            case 'lines':
-              shouldSelect = geometryType.includes('LineString')
-              break
-            case 'polygons':
-              shouldSelect = geometryType.includes('Polygon')
-              break
-            case 'total':
-              shouldSelect = true
-              break
-          }
-
-          if (shouldSelect) {
-            newSelection.add(layer)
-          }
-        } catch (e) {
-          console.warn('处理图层失败:', e)
+        let shouldSelect = false
+        switch (type) {
+          case 'points': shouldSelect = geometryType === 'Point'; break
+          case 'lines': shouldSelect = geometryType.includes('LineString'); break
+          case 'polygons': shouldSelect = geometryType.includes('Polygon'); break
+          case 'total': shouldSelect = true; break
         }
-      })
 
-      selectedLayers.value = newSelection
-      if (newSelection.size > 0) {
-        ElMessage.success(`已选中${newSelection.size}个${type === 'total' ? '图形' : type}`)
-      } else {
-        ElMessage.info(`没有找到${type === 'total' ? '图形' : type}`)
+        if (shouldSelect) newSelection.add(layer)
+      } catch (error) {
+        console.warn('处理图层失败:', error)
       }
-    } catch (e) {
-      console.warn('选择几何图形失败:', e)
-      ElMessage.warning('操作失败，请检查地图是否已加载')
+    })
+
+    selectedLayers.value = newSelection
+    const typeName = type === 'total' ? '图形' : getGeometryTypeName(type)
+
+    if (newSelection.size > 0) {
+      ElMessage.success(`已选中 ${newSelection.size} 个${typeName}`)
+    } else {
+      ElMessage.info(`没有找到${typeName}`)
     }
   }
 
-  // 右键菜单操作
+  // === 右键菜单操作 ===
   const showContextMenu = (point) => {
     contextMenuStyle.value = {
       position: 'fixed',
       left: point.x + 'px',
       top: point.y + 'px',
-      zIndex: 10000,
+      zIndex: 10000
     }
     contextMenuVisible.value = true
   }
@@ -349,25 +262,20 @@ export function useMapOperations() {
           properties: {
             ...geojson.properties,
             id: index + 1,
-            created: new Date().toISOString(),
-          },
+            exported: new Date().toISOString()
+          }
         }
       })
 
-      let result
-      if (features.length === 1) {
-        result = features[0]
-      } else {
-        result = {
-          type: 'FeatureCollection',
-          features: features,
-        }
+      const result = features.length === 1 ? features[0] : {
+        type: 'FeatureCollection',
+        features
       }
 
       await navigator.clipboard.writeText(JSON.stringify(result, null, 2))
       ElMessage.success('GeoJSON已复制到剪贴板')
-    } catch (e) {
-      ElMessage.error('复制失败: ' + e.message)
+    } catch (error) {
+      ElMessage.error('复制失败: ' + error.message)
     }
 
     hideContextMenu()
@@ -386,11 +294,10 @@ export function useMapOperations() {
         return `-- 图形 ${index + 1} (${geojson.geometry.type})\n${wkt}`
       })
 
-      const result = wktArray.join('\n\n')
-      await navigator.clipboard.writeText(result)
+      await navigator.clipboard.writeText(wktArray.join('\n\n'))
       ElMessage.success('WKT已复制到剪贴板')
-    } catch (e) {
-      ElMessage.error('复制失败: ' + e.message)
+    } catch (error) {
+      ElMessage.error('复制失败: ' + error.message)
     }
 
     hideContextMenu()
@@ -404,67 +311,45 @@ export function useMapOperations() {
     }
 
     const layer = Array.from(selectedLayers.value)[0]
-    const geojson = layer.toGeoJSON()
 
     try {
+      const geojson = layer.toGeoJSON()
+      const layerStats = calculateLayerStats(layer)
+
       const info = {
         type: geojson.geometry.type,
         coordinates: JSON.stringify(geojson.geometry.coordinates).split(',').length,
-        coordinateDetails: JSON.stringify(geojson.geometry.coordinates, null, 2),
+        coordinateDetails: JSON.stringify(geojson.geometry.coordinates, null, 2)
       }
 
-      // 计算面积和周长
-      if (
-        geojson.geometry.type.includes('Polygon') ||
-        (layer.getRadius && typeof layer.getRadius === 'function')
-      ) {
-        info.area = calculateArea(layer)
+      // 添加面积和长度信息
+      if (layerStats.area) info.area = formatArea(layerStats.area)
+      if (layerStats.length) info.length = formatLength(layerStats.length)
 
-        if (layer.getRadius && typeof layer.getRadius === 'function') {
-          const circumference = 2 * Math.PI * layer.getRadius()
-          info.perimeter = formatLength(circumference)
-        } else {
-          try {
-            const perimeter = turf.length(turf.polygonToLine(geojson), { units: 'meters' })
-            info.perimeter = formatLength(perimeter)
-          } catch (e) {
-            console.warn('计算周长失败:', e)
-          }
-        }
-      } else if (geojson.geometry.type.includes('LineString')) {
-        const length = turf.length(geojson, { units: 'meters' })
-        info.length = formatLength(length)
-      }
-
-      // 边界框
+      // 计算边界框和中心点
       try {
         const bbox = turf.bbox(geojson)
         info.bbox = {
           sw: `${bbox[0].toFixed(6)}, ${bbox[1].toFixed(6)}`,
-          ne: `${bbox[2].toFixed(6)}, ${bbox[3].toFixed(6)}`,
+          ne: `${bbox[2].toFixed(6)}, ${bbox[3].toFixed(6)}`
         }
-      } catch (e) {
-        console.warn('计算边界框失败:', e)
-      }
 
-      // 中心点
-      try {
         const centroid = turf.centroid(geojson)
         info.centroid = `${centroid.geometry.coordinates[0].toFixed(6)}, ${centroid.geometry.coordinates[1].toFixed(6)}`
-      } catch (e) {
-        console.warn('计算中心点失败:', e)
+      } catch (error) {
+        console.warn('计算几何属性失败:', error)
       }
 
       selectedGeometryInfo.value = info
       geometryInfoVisible.value = true
-    } catch (e) {
-      ElMessage.error('获取几何信息失败: ' + e.message)
+    } catch (error) {
+      ElMessage.error('获取几何信息失败: ' + error.message)
     }
 
     hideContextMenu()
   }
 
-  const measureDistance = async () => {
+  const measureDistance = () => {
     if (selectedLayers.value.size < 2) {
       ElMessage.warning('请选择至少两个图形测量距离')
       hideContextMenu()
@@ -487,20 +372,20 @@ export function useMapOperations() {
           distances.push({
             from: i + 1,
             to: j + 1,
-            distance: formatLength(distance),
+            distance: formatLength(distance)
           })
         }
       }
 
-      const distanceText = distances
-        .map((d) => `图形${d.from}到图形${d.to}: ${d.distance}`)
+      const message = distances
+        .map(d => `图形${d.from}到图形${d.to}: ${d.distance}`)
         .join('\n')
 
-      ElMessageBox.alert(distanceText, '距离测量结果', {
-        confirmButtonText: '确定',
+      ElMessageBox.alert(message, '距离测量结果', {
+        confirmButtonText: '确定'
       })
-    } catch (e) {
-      ElMessage.error('距离测量失败: ' + e.message)
+    } catch (error) {
+      ElMessage.error('距离测量失败: ' + error.message)
     }
 
     hideContextMenu()
@@ -520,47 +405,38 @@ export function useMapOperations() {
       }
 
       const count = selectedLayers.value.size
-      selectedLayers.value.forEach((layer) => {
-        drawnItems.removeLayer(layer)
-      })
-
+      selectedLayers.value.forEach(layer => drawnItems.removeLayer(layer))
       selectedLayers.value.clear()
-      updateGeoJsonFromMap()
-      ElMessage.success(`已删除${count}个图形`)
-    } catch (e) {
-      ElMessage.error('删除失败: ' + e.message)
+
+      updateStats()
+      ElMessage.success(`已删除 ${count} 个图形`)
+    } catch (error) {
+      ElMessage.error('删除失败: ' + error.message)
     }
 
     hideContextMenu()
   }
 
-  // 其他右键菜单功能（简化版本）
-  const duplicateSelected = () => {
-    ElMessage.info('复制功能需要在实际项目中实现')
+  // === 简化的功能占位符 ===
+  const createPlaceholderFunction = (name) => () => {
+    ElMessage.info(`${name}功能正在开发中`)
     hideContextMenu()
   }
 
-  const cropWithSelected = () => {
-    ElMessage.info('裁剪功能需要在实际项目中实现')
-    hideContextMenu()
+  const duplicateSelected = createPlaceholderFunction('复制图形')
+  const cropWithSelected = createPlaceholderFunction('裁剪')
+  const unionSelected = createPlaceholderFunction('合并')
+  const bufferSelected = createPlaceholderFunction('缓冲区分析')
+  const convexHull = createPlaceholderFunction('凸包分析')
+
+  // === 监听器清理 ===
+  const cleanup = () => {
+    leafletMapRef.value = null
+    selectedLayers.value.clear()
+    contextMenuVisible.value = false
+    geometryInfoVisible.value = false
   }
 
-  const unionSelected = () => {
-    ElMessage.info('合并功能需要在实际项目中实现')
-    hideContextMenu()
-  }
-
-  const bufferSelected = () => {
-    ElMessage.info('缓冲区分析功能需要在实际项目中实现')
-    hideContextMenu()
-  }
-
-  const convexHull = () => {
-    ElMessage.info('凸包分析功能需要在实际项目中实现')
-    hideContextMenu()
-  }
-
-  // === 返回接口 ===
   return {
     // 状态
     leafletMapRef,
@@ -579,7 +455,7 @@ export function useMapOperations() {
     handleSelectionChange,
     selectGeometryType,
     setLeafletMapRef,
-    forceUpdateStats,
+    updateStats,
 
     // 右键菜单
     contextMenuVisible,
@@ -601,5 +477,8 @@ export function useMapOperations() {
     selectedGeometryInfo,
     showCoordinateDetails,
     getGeometryInfo,
+
+    // 清理函数
+    cleanup
   }
 }
