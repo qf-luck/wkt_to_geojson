@@ -60,7 +60,7 @@
       <div class="map-tips">
         <div class="tip-item">
           <el-icon><Mouse /></el-icon>
-          <span>单击选择，Ctrl+单击多选，双击查看详情</span>
+          <span>单击选择，Ctrl+单击多选，双击查看属性</span>
         </div>
         <div class="tip-item">
           <el-icon><Position /></el-icon>
@@ -93,8 +93,17 @@
         @selection-changed="handleSelectionChanged"
         @mouse-position-changed="handleMousePositionChanged"
         @show-context-menu="handleShowContextMenu"
+        @show-layer-properties="handleShowLayerProperties"
       />
     </div>
+
+    <!-- 属性查看对话框 -->
+    <PropertiesViewer
+      v-model="showPropertiesDialog"
+      :layer="currentLayer"
+      @layer-updated="handleLayerUpdated"
+      @export-layer="handleExportLayer"
+    />
   </div>
 </template>
 
@@ -105,9 +114,10 @@ import {
   Mouse, Position, Location, Select, DataLine
 } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
+import PropertiesViewer from './PropertiesViewer.vue'
 
 // Props
-const props = defineProps({
+defineProps({
   currentMapStyle: { type: String, default: 'osm' },
   mousePosition: { type: String, default: '经度: --, 纬度: --' },
   selectionInfo: { type: String, default: '选中: --' },
@@ -129,7 +139,9 @@ const emit = defineEmits([
   'geometry-updated',
   'selection-changed',
   'mouse-position-changed',
-  'show-context-menu'
+  'show-context-menu',
+  'layer-updated',
+  'export-layer'
 ])
 
 // 组件引用
@@ -137,6 +149,8 @@ const leafletMapRef = ref(null)
 
 // 响应式数据
 const selectedLayersCount = ref(0)
+const showPropertiesDialog = ref(false)
+const currentLayer = ref(null)
 
 // 计算属性
 const hasSelection = computed(() => selectedLayersCount.value > 0)
@@ -155,8 +169,22 @@ const handleMousePositionChanged = (position) => {
   emit('mouse-position-changed', position)
 }
 
-const handleShowContextMenu = (point) => {
-  emit('show-context-menu', point)
+const handleShowContextMenu = (contextData) => {
+  emit('show-context-menu', contextData)
+}
+
+const handleShowLayerProperties = (layer) => {
+  currentLayer.value = layer
+  showPropertiesDialog.value = true
+}
+
+const handleLayerUpdated = (layer) => {
+  emit('layer-updated', layer)
+  emit('geometry-updated') // 触发几何更新以刷新统计
+}
+
+const handleExportLayer = (layer) => {
+  emit('export-layer', layer)
 }
 
 // 地图控制方法

@@ -28,7 +28,8 @@ const emit = defineEmits([
   'geometry-updated',
   'selection-changed',
   'mouse-position-changed',
-  'show-context-menu'
+  'show-context-menu',
+  'show-layer-properties'
 ])
 
 // 核心引用
@@ -56,16 +57,17 @@ const fixLeafletIcons = () => {
   }
 }
 
-const formatArea = (squareMeters) => {
-  if (squareMeters < 10000) return `${squareMeters.toFixed(2)} m²`
-  if (squareMeters < 1000000) return `${(squareMeters / 10000).toFixed(2)} 公顷`
-  return `${(squareMeters / 1000000).toFixed(2)} km²`
-}
+// 预留的格式化函数供将来使用
+// const formatArea = (squareMeters) => {
+//   if (squareMeters < 10000) return `${squareMeters.toFixed(2)} m²`
+//   if (squareMeters < 1000000) return `${(squareMeters / 10000).toFixed(2)} 公顷`
+//   return `${(squareMeters / 1000000).toFixed(2)} km²`
+// }
 
-const formatLength = (meters) => {
-  if (meters < 1000) return `${meters.toFixed(2)} m`
-  return `${(meters / 1000).toFixed(2)} km`
-}
+// const formatLength = (meters) => {
+//   if (meters < 1000) return `${meters.toFixed(2)} m`
+//   return `${(meters / 1000).toFixed(2)} km`
+// }
 
 const getGeometryTypeName = (type) => {
   const typeNames = {
@@ -73,6 +75,43 @@ const getGeometryTypeName = (type) => {
     circle: '圆形', marker: '标记点', point: '点'
   }
   return typeNames[type?.toLowerCase()] || '图形'
+}
+
+const calculateArea = (layer) => {
+  try {
+    if (layer instanceof L.Polygon || layer instanceof L.Rectangle) {
+      // 使用 Leaflet 的 GeometryUtil 计算面积
+      const latlngs = layer.getLatLngs()[0]
+      let area = 0
+      for (let i = 0; i < latlngs.length - 1; i++) {
+        area += latlngs[i].distanceTo(latlngs[i + 1])
+      }
+      // 简化的面积计算，实际应使用更精确的算法
+      return Math.abs(area).toFixed(2)
+    } else if (layer instanceof L.Circle) {
+      const radius = layer.getRadius()
+      return (Math.PI * radius * radius).toFixed(2)
+    }
+  } catch (error) {
+    console.warn('计算面积失败:', error)
+  }
+  return null
+}
+
+const calculateLength = (layer) => {
+  try {
+    if (layer instanceof L.Polyline) {
+      const latlngs = layer.getLatLngs()
+      let totalLength = 0
+      for (let i = 0; i < latlngs.length - 1; i++) {
+        totalLength += latlngs[i].distanceTo(latlngs[i + 1])
+      }
+      return totalLength.toFixed(2)
+    }
+  } catch (error) {
+    console.warn('计算长度失败:', error)
+  }
+  return null
 }
 
 // === 地图初始化 ===
@@ -105,23 +144,66 @@ const setupDrawControls = () => {
       position: 'topleft',
       edit: {
         featureGroup: drawnItems,
-        remove: true
+        remove: true,
+        poly: {
+          allowIntersection: false
+        }
       },
       draw: {
         polygon: {
           allowIntersection: false,
-          shapeOptions: { color: '#3498db', weight: 3, fillOpacity: 0.2 }
+          showArea: true,
+          drawError: {
+            color: '#e74c3c',
+            message: '<strong>错误:</strong> 形状边缘不能交叉!'
+          },
+          shapeOptions: { 
+            color: '#3498db', 
+            weight: 3, 
+            fillOpacity: 0.2,
+            stroke: true,
+            fill: true
+          }
         },
         polyline: {
-          shapeOptions: { color: '#e74c3c', weight: 4 }
+          shapeOptions: { 
+            color: '#e74c3c', 
+            weight: 4,
+            opacity: 1
+          }
         },
         rectangle: {
-          shapeOptions: { color: '#f39c12', weight: 3, fillOpacity: 0.2 }
+          shapeOptions: { 
+            color: '#f39c12', 
+            weight: 3, 
+            fillOpacity: 0.2,
+            stroke: true,
+            fill: true,
+            clickable: true
+          },
+          showArea: true
         },
         circle: {
-          shapeOptions: { color: '#2ecc71', weight: 3, fillOpacity: 0.2 }
+          shapeOptions: { 
+            color: '#2ecc71', 
+            weight: 3, 
+            fillOpacity: 0.2,
+            stroke: true,
+            fill: true
+          },
+          showRadius: true
         },
-        marker: true,
+        marker: {
+          icon: new L.Icon({
+            iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+            iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41]
+          })
+        },
         circlemarker: {
           color: '#9b59b6',
           weight: 3,
@@ -193,7 +275,16 @@ const setupLayerEvents = (layer) => {
       clearSelection()
       selectLayer(layer)
     }
-    emit('show-context-menu', e.containerPoint)
+    emit('show-context-menu', { 
+      point: e.containerPoint, 
+      layer: layer 
+    })
+  })
+
+  // 双击显示属性
+  layer.on('dblclick', (e) => {
+    L.DomEvent.stopPropagation(e)
+    showLayerProperties(layer)
   })
 
   layer.on('mouseover', () => {
@@ -215,6 +306,28 @@ const setupMapEvents = () => {
     const layer = event.layer
     const type = event.layerType
 
+    // 特殊处理矩形类型
+    let geometry = layer.toGeoJSON().geometry
+    if (type === 'rectangle' && layer.getBounds) {
+      // 确保矩形正确转换为多边形几何体
+      const bounds = layer.getBounds()
+      const ne = bounds.getNorthEast()
+      const sw = bounds.getSouthWest()
+      const nw = L.latLng(ne.lat, sw.lng)
+      const se = L.latLng(sw.lat, ne.lng)
+      
+      geometry = {
+        type: 'Polygon',
+        coordinates: [[
+          [sw.lng, sw.lat],
+          [se.lng, se.lat],
+          [ne.lng, ne.lat],
+          [nw.lng, nw.lat],
+          [sw.lng, sw.lat]
+        ]]
+      }
+    }
+
     // 设置图层属性
     layer.feature = {
       type: 'Feature',
@@ -222,9 +335,11 @@ const setupMapEvents = () => {
         id: Date.now(),
         type: type,
         created: new Date().toISOString(),
-        name: `${getGeometryTypeName(type)}_${Date.now()}`
+        name: `${getGeometryTypeName(type)}_${Date.now()}`,
+        area: type === 'rectangle' || type === 'polygon' || type === 'circle' ? calculateArea(layer) : null,
+        length: type === 'polyline' ? calculateLength(layer) : null
       },
-      geometry: layer.toGeoJSON().geometry
+      geometry: geometry
     }
 
     drawnItems.addLayer(layer)
@@ -383,7 +498,10 @@ const initMap = async () => {
       center: [39.9042, 116.4074],
       zoom: 10,
       zoomControl: true,
-      attributionControl: true
+      attributionControl: true,
+      crs: L.CRS.EPSG3857,  // 明确指定坐标参考系统
+      worldCopyJump: false,  // 防止世界地图重复
+      maxBoundsViscosity: 1.0  // 边界粘性
     })
 
     initTileLayers()
@@ -534,7 +652,7 @@ const zoomToFit = () => {
     const bounds = drawnItems.getBounds()
     map.fitBounds(bounds.pad(0.1), { animate: true })
     ElMessage.success('已调整到最佳视图')
-  } catch (error) {
+  } catch {
     ElMessage.error('调整视图失败')
   }
 }
@@ -550,7 +668,7 @@ const zoomToSelected = () => {
     const bounds = group.getBounds()
     map.fitBounds(bounds.pad(0.2), { animate: true })
     ElMessage.success('已缩放到选中图层')
-  } catch (error) {
+  } catch {
     ElMessage.error('缩放失败')
   }
 }
@@ -582,6 +700,27 @@ const searchLayers = (searchTerm) => {
   }
 }
 
+const showLayerProperties = (layer) => {
+  if (!layer || !layer.feature) {
+    ElMessage.warning('无法获取图层信息')
+    return
+  }
+  
+  emit('show-layer-properties', layer)
+}
+
+const getSelectedLayerProperties = () => {
+  if (selectedLayers.value.size === 0) {
+    return []
+  }
+  
+  return Array.from(selectedLayers.value).map(layer => ({
+    layer: layer,
+    properties: layer.feature?.properties || {},
+    geometry: layer.feature?.geometry || null
+  }))
+}
+
 // === 生命周期和监听器 ===
 watch(() => props.currentMapStyle, (newStyle) => {
   if (newStyle && isInitialized.value) {
@@ -611,7 +750,9 @@ defineExpose({
   zoomToSelected,
   selectAllLayers,
   searchLayers,
+  showLayerProperties,
   getSelectedLayers: () => selectedLayers.value,
+  getSelectedLayerProperties,
   getDrawnItems: () => drawnItems,
   isInitialized: () => isInitialized.value
 })

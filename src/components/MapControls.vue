@@ -281,9 +281,9 @@ const selectAllResults = () => {
   showSearchDialog.value = false
 }
 
-const showLayerInfo = () => {
-  showLayerInfoDialog.value = true
-}
+// const showLayerInfo = () => {
+//   showLayerInfoDialog.value = true
+// }
 
 // 定义 emit
 const emit = defineEmits([
