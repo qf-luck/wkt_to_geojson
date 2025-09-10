@@ -1,6 +1,6 @@
 // src/composables/useMapOperations.js - 优化版本
-import { computed, ref, nextTick, watch } from 'vue'
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
+import { computed, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import * as turf from '@turf/turf'
 import wellknown from 'wellknown'
 
@@ -101,7 +101,7 @@ export function useMapOperations() {
     try {
       const drawnItems = leafletMapRef.value?.getDrawnItems?.()
       return drawnItems && drawnItems.getLayers().length > 0
-    } catch (error) {
+    } catch {
       return false
     }
   })

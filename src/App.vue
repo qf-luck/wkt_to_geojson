@@ -267,24 +267,31 @@ onMounted(() => {
   setTimeout(() => clearInterval(checkInterval), 10000)
 })
 
-onUnmounted(() => {
-  cleanup()
-})
-
 // 全局错误处理
-window.addEventListener('error', (event) => {
+const handleGlobalError = (event) => {
   console.error('全局错误:', event.error)
   if (event.error?.message?.includes('Leaflet') || event.error?.message?.includes('map')) {
     ElMessage.error('地图操作出现错误，请刷新页面重试')
   }
-})
+}
 
-// 全局未处理Promise错误
-window.addEventListener('unhandledrejection', (event) => {
+const handleUnhandledRejection = (event) => {
   console.error('未处理的Promise错误:', event.reason)
   if (event.reason?.message?.includes('地图') || event.reason?.message?.includes('map')) {
     ElMessage.warning('地图操作失败，请重试')
   }
+}
+
+// 添加事件监听器
+window.addEventListener('error', handleGlobalError)
+window.addEventListener('unhandledrejection', handleUnhandledRejection)
+
+// 组件卸载时清理
+onUnmounted(() => {
+  cleanup()
+  // 清理事件监听器
+  window.removeEventListener('error', handleGlobalError)
+  window.removeEventListener('unhandledrejection', handleUnhandledRejection)
 })
 </script>
 

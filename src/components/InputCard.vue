@@ -77,7 +77,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'draw-on-map'])
 
 // 组合函数
-const { history, canUndo, undo: undoHistory, addToHistory } = useHistory()
+const { canUndo, undo: undoHistory, addToHistory } = useHistory()
 const { copyToClipboard, saveToFile } = useFileOperations()
 
 // 方法

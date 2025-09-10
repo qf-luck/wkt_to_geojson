@@ -17,6 +17,36 @@ import 'leaflet-draw'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import wellknown from 'wellknown'
 
+// 全局修复leaflet-draw的readableArea bug
+if (typeof window !== 'undefined') {
+  // 延迟修复以确保leaflet-draw完全加载
+  setTimeout(() => {
+    if (window.L && window.L.GeometryUtil) {
+      // 重写有问题的函数
+      window.L.GeometryUtil.readableArea = function(area, isMetric, type) {
+        let areaStr = ''
+        
+        if (isMetric !== false) { // 默认使用公制
+          if (area >= 10000) {
+            areaStr = (area * 0.0001).toFixed(2) + ' 公顷'
+          } else {
+            areaStr = area.toFixed(2) + ' m²'
+          }
+        } else {
+          area *= 10.7639  // 转换为平方英尺
+          if (area >= 43560) {
+            areaStr = (area / 43560).toFixed(2) + ' 英亩'
+          } else {
+            areaStr = area.toFixed(2) + ' ft²'
+          }
+        }
+        
+        return areaStr
+      }
+    }
+  }, 0)
+}
+
 // Props
 const props = defineProps({
   currentMapStyle: { type: String, default: 'osm' },
@@ -54,6 +84,60 @@ const fixLeafletIcons = () => {
     })
   } catch (error) {
     console.warn('修复Leaflet图标失败:', error)
+  }
+}
+
+// 修复leaflet-draw的readableArea bug
+const fixLeafletDrawBug = () => {
+  try {
+    // 等待leaflet-draw完全加载
+    if (window.L && window.L.GeometryUtil) {
+      // 重写readableArea函数以修复bug
+      window.L.GeometryUtil.readableArea = function(area, isMetric, type) {
+        let areaStr = ''
+        
+        if (isMetric) {
+          if (area >= 10000) {
+            areaStr = (area * 0.0001).toFixed(2) + ' 公顷'
+          } else {
+            areaStr = area.toFixed(2) + ' m²'
+          }
+        } else {
+          area *= 10.7639  // 转换为平方英尺
+          if (area >= 43560) {
+            areaStr = (area / 43560).toFixed(2) + ' 英亩'
+          } else {
+            areaStr = area.toFixed(2) + ' ft²'
+          }
+        }
+        
+        return areaStr
+      }
+      
+      // 重写readableDistance函数
+      window.L.GeometryUtil.readableDistance = function(distance, isMetric, isFeet, isNauticalMile) {
+        let distanceStr = ''
+        
+        if (isMetric) {
+          if (distance > 1000) {
+            distanceStr = (distance / 1000).toFixed(2) + ' km'
+          } else {
+            distanceStr = distance.toFixed(2) + ' m'
+          }
+        } else {
+          distance *= 3.28084  // 转换为英尺
+          if (distance >= 5280) {
+            distanceStr = (distance / 5280).toFixed(2) + ' 英里'
+          } else {
+            distanceStr = distance.toFixed(2) + ' ft'
+          }
+        }
+        
+        return distanceStr
+      }
+    }
+  } catch (error) {
+    console.warn('修复leaflet-draw bug失败:', error)
   }
 }
 
@@ -139,6 +223,9 @@ const initTileLayers = () => {
 const setupDrawControls = () => {
   try {
     if (drawControl) map.removeControl(drawControl)
+
+    // 应用leaflet-draw bug修复
+    fixLeafletDrawBug()
 
     drawControl = new L.Control.Draw({
       position: 'topleft',
@@ -307,7 +394,7 @@ const setupMapEvents = () => {
       const layer = event.layer
       const type = event.layerType || 'unknown'
       
-      console.log('绘制事件:', { layer, type, event })
+      // console.log('绘制事件:', { layer, type, event })
 
       // 特殊处理矩形类型
       let geometry
@@ -520,6 +607,7 @@ const initMap = async () => {
     }
 
     fixLeafletIcons()
+    fixLeafletDrawBug()
 
     if (map) {
       map.off()
@@ -761,7 +849,11 @@ watch(() => props.currentMapStyle, (newStyle) => {
 })
 
 onMounted(() => {
-  setTimeout(initMap, 100)
+  // 立即应用leaflet-draw修复
+  setTimeout(() => {
+    fixLeafletDrawBug()
+    initMap()
+  }, 100)
 })
 
 onUnmounted(() => {

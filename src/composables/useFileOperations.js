@@ -11,7 +11,7 @@ export function useFileOperations() {
     try {
       await navigator.clipboard.writeText(text)
       ElMessage.success('已复制到剪贴板')
-    } catch (e) {
+    } catch {
       // 降级方案
       try {
         const textArea = document.createElement('textarea')
@@ -21,7 +21,7 @@ export function useFileOperations() {
         document.execCommand('copy')
         document.body.removeChild(textArea)
         ElMessage.success('已复制到剪贴板')
-      } catch (fallbackError) {
+      } catch {
         ElMessage.error('复制失败，请手动复制')
       }
     }

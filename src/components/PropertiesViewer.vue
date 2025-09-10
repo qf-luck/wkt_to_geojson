@@ -188,7 +188,14 @@ const dialogTitle = computed(() => {
 })
 
 const layerInfo = computed(() => {
-  if (!selectedLayer.value?.feature) return {}
+  if (!selectedLayer.value?.feature?.properties) return {
+    id: 'N/A',
+    type: 'unknown',
+    typeName: '未知',
+    created: null,
+    edited: null,
+    name: '未命名图层'
+  }
   
   const props = selectedLayer.value.feature.properties
   return {
@@ -332,9 +339,11 @@ const calculateLayerLength = (layer) => {
 }
 
 const updateLayerProperty = (key, value) => {
-  if (selectedLayer.value?.feature?.properties) {
-    selectedLayer.value.feature.properties[key] = value
+  if (!selectedLayer.value?.feature?.properties) {
+    console.warn('无法更新图层属性: 图层或属性对象不存在')
+    return
   }
+  selectedLayer.value.feature.properties[key] = value
 }
 
 const updatePropertyKey = (oldKey, newKey) => {
@@ -399,18 +408,26 @@ const copyGeoJSON = () => {
 }
 
 const saveChanges = () => {
-  if (!selectedLayer.value?.feature?.properties) return
+  if (!selectedLayer.value?.feature?.properties) {
+    ElMessage.error('无法保存: 图层属性不存在')
+    return
+  }
   
-  // 保存自定义属性
-  Object.keys(customProperties.value).forEach(key => {
-    selectedLayer.value.feature.properties[key] = customProperties.value[key]
-  })
-  
-  // 更新编辑时间
-  selectedLayer.value.feature.properties.edited = new Date().toISOString()
-  
-  emit('layer-updated', selectedLayer.value)
-  ElMessage.success('属性已保存')
+  try {
+    // 保存自定义属性
+    Object.keys(customProperties.value).forEach(key => {
+      selectedLayer.value.feature.properties[key] = customProperties.value[key]
+    })
+    
+    // 更新编辑时间
+    selectedLayer.value.feature.properties.edited = new Date().toISOString()
+    
+    emit('layer-updated', selectedLayer.value)
+    ElMessage.success('属性已保存')
+  } catch (error) {
+    console.error('保存属性失败:', error)
+    ElMessage.error('保存失败: ' + error.message)
+  }
 }
 
 const exportLayer = () => {
@@ -419,22 +436,32 @@ const exportLayer = () => {
 
 // 初始化数据
 const initializeData = () => {
-  if (!selectedLayer.value?.feature?.properties) return
-  
-  const props = selectedLayer.value.feature.properties
-  editableProperties.value = {
-    name: props.name || ''
+  if (!selectedLayer.value?.feature?.properties) {
+    editableProperties.value = { name: '' }
+    customProperties.value = {}
+    return
   }
   
-  // 提取自定义属性（排除系统属性）
-  const systemKeys = ['id', 'type', 'created', 'edited', 'name', 'area', 'length']
-  customProperties.value = {}
-  
-  Object.keys(props).forEach(key => {
-    if (!systemKeys.includes(key)) {
-      customProperties.value[key] = props[key]
+  try {
+    const props = selectedLayer.value.feature.properties
+    editableProperties.value = {
+      name: props.name || ''
     }
-  })
+    
+    // 提取自定义属性（排除系统属性）
+    const systemKeys = ['id', 'type', 'created', 'edited', 'name', 'area', 'length']
+    customProperties.value = {}
+    
+    Object.keys(props).forEach(key => {
+      if (!systemKeys.includes(key)) {
+        customProperties.value[key] = props[key]
+      }
+    })
+  } catch (error) {
+    console.error('初始化数据失败:', error)
+    editableProperties.value = { name: '' }
+    customProperties.value = {}
+  }
 }
 
 // 监听器
