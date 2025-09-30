@@ -2,7 +2,12 @@
 <template>
   <div class="app-container">
     <!-- 头部 -->
-    <HeaderSection />
+    <HeaderSection
+      @open-file="showFileDialog = true"
+      @export-file="handleExportFile"
+      @show-shortcuts="showShortcutsDialog = true"
+      @show-help="handleShowHelp"
+    />
 
     <!-- 主要内容区域 -->
     <div class="main-content">
@@ -72,13 +77,16 @@
 
       <!-- 全局加载指示器 -->
       <LoadingOverlay v-if="globalLoading" :message="loadingMessage" />
+
+      <!-- 快捷键帮助对话框 -->
+      <ShortcutsDialog v-model="showShortcutsDialog" />
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref, onUnmounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import HeaderSection from './components/HeaderSection.vue'
 import ConverterSection from './components/ConverterSection.vue'
 import MapSection from './components/MapSection.vue'
@@ -86,9 +94,11 @@ import StatsSection from './components/StatsSection.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import GeometryInfoDialog from './components/GeometryInfoDialog.vue'
 import LoadingOverlay from './components/LoadingOverlay.vue'
+import ShortcutsDialog from './components/ShortcutsDialog.vue'
 import { useGeometry } from './composables/useGeometry'
 import { useMapOperations } from './composables/useMapOperations'
 import { useValidation } from './composables/useValidation'
+import { useKeyboardShortcuts } from './composables/useKeyboardShortcuts'
 import * as turf from '@turf/turf'
 
 // === 组合函数 ===
@@ -142,6 +152,10 @@ const { geojsonError, wktError } = useValidation(geojsonText, wktText)
 
 // === 组件引用 ===
 const mapSectionRef = ref(null)
+
+// === 对话框状态 ===
+const showShortcutsDialog = ref(false)
+const showFileDialog = ref(false)
 
 // === 计算属性 ===
 const selectionInfo = computed(() => {
@@ -243,12 +257,137 @@ const handleGeometryUpdated = () => {
   updateGeoJsonFromMap()
 }
 
+// === 文件操作 ===
+const handleExportFile = () => {
+  if (!hasGeometry.value) {
+    ElMessage.warning('没有可导出的数据，请先在地图上绘制或导入图形')
+    return
+  }
+
+  try {
+    const drawnItems = mapSectionRef.value?.getDrawnItems?.()
+    if (!drawnItems) {
+      ElMessage.error('无法获取地图数据')
+      return
+    }
+
+    const features = []
+    drawnItems.eachLayer(layer => {
+      try {
+        const geojson = layer.toGeoJSON()
+        features.push(geojson)
+      } catch (error) {
+        console.warn('导出图层失败:', error)
+      }
+    })
+
+    if (features.length === 0) {
+      ElMessage.warning('没有可导出的图形')
+      return
+    }
+
+    const exportData = {
+      type: 'FeatureCollection',
+      features: features
+    }
+
+    const dataStr = JSON.stringify(exportData, null, 2)
+    const blob = new Blob([dataStr], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `export_${new Date().toISOString().split('T')[0]}.geojson`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+
+    ElMessage.success('导出成功！')
+  } catch (error) {
+    console.error('导出失败:', error)
+    ElMessage.error('导出失败: ' + error.message)
+  }
+}
+
+const handleShowHelp = () => {
+  ElMessageBox.alert(
+    `<div style="text-align: left;">
+      <h3 style="margin-top: 0;">🗺️ 使用说明</h3>
+      <p><strong>1. 数据转换</strong></p>
+      <ul>
+        <li>在左右输入框中输入 GeoJSON 或 WKT 数据</li>
+        <li>点击中间的转换按钮进行格式转换</li>
+        <li>支持加载示例、格式化、清空等操作</li>
+      </ul>
+      <p><strong>2. 地图绘制</strong></p>
+      <ul>
+        <li>使用左侧工具栏绘制点、线、面等图形</li>
+        <li>点击图形可选中，Ctrl+点击可多选</li>
+        <li>双击图形可查看详细属性</li>
+        <li>右键点击可使用高级功能</li>
+      </ul>
+      <p><strong>3. 快捷键</strong></p>
+      <ul>
+        <li>按 <kbd>F1</kbd> 或 <kbd>?</kbd> 查看所有快捷键</li>
+        <li>Ctrl+Z/Y: 撤销/重做</li>
+        <li>Ctrl+C/V: 复制/粘贴</li>
+        <li>Ctrl+A: 全选</li>
+      </ul>
+      <p><strong>4. 高级功能</strong></p>
+      <ul>
+        <li>几何验证和简化</li>
+        <li>缓冲区分析</li>
+        <li>图形合并和凸包</li>
+        <li>距离测量和面积计算</li>
+      </ul>
+    </div>`,
+    '帮助文档',
+    {
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: '我知道了',
+      center: false
+    }
+  )
+}
+
 // === 组件引用设置 ===
 const setupMapReference = () => {
   if (mapSectionRef.value?.leafletMapRef) {
     setLeafletMapRef(mapSectionRef.value.leafletMapRef)
   }
 }
+
+// === 键盘快捷键 ===
+useKeyboardShortcuts({
+  // 文件操作
+  open: () => { showFileDialog.value = true },
+  export: handleExportFile,
+
+  // 选择操作
+  selectAll: () => {
+    if (mapSectionRef.value) {
+      mapSectionRef.value.selectAllLayers?.()
+    }
+  },
+  deselectAll: () => {
+    if (mapSectionRef.value) {
+      mapSectionRef.value.clearSelection?.()
+    }
+  },
+
+  // 视图操作
+  fit: () => {
+    if (mapSectionRef.value) {
+      mapSectionRef.value.zoomToFit?.()
+    }
+  },
+
+  // 删除操作
+  delete: deleteSelected,
+
+  // 帮助
+  showHelp: () => { showShortcutsDialog.value = true }
+})
 
 // === 生命周期 ===
 onMounted(() => {

@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as turf from '@turf/turf'
 import wellknown from 'wellknown'
+import L from 'leaflet'
 
 export function useMapOperations() {
   // === 核心状态 ===
@@ -417,17 +418,273 @@ export function useMapOperations() {
     hideContextMenu()
   }
 
-  // === 简化的功能占位符 ===
-  const createPlaceholderFunction = (name) => () => {
-    ElMessage.info(`${name}功能正在开发中`)
+  // === 高级几何操作 ===
+  const duplicateSelected = () => {
+    if (selectedLayers.value.size === 0) {
+      ElMessage.warning('请先选择图形')
+      hideContextMenu()
+      return
+    }
+
+    try {
+      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
+      if (!drawnItems) {
+        ElMessage.warning('地图未准备好')
+        return
+      }
+
+      let duplicateCount = 0
+      selectedLayers.value.forEach(layer => {
+        try {
+          const geojson = layer.toGeoJSON()
+
+          // 偏移复制的图形
+          const offsetGeojson = turf.transformTranslate(geojson, 0.001, 45, { units: 'kilometers' })
+
+          // 创建新图层
+          const newLayerGroup = L.geoJSON(offsetGeojson, {
+            pointToLayer: (feature, latlng) => L.marker(latlng),
+            style: { color: '#9b59b6', weight: 3, fillOpacity: 0.2 }
+          })
+
+          newLayerGroup.eachLayer(newLayer => {
+            newLayer.feature = {
+              ...offsetGeojson,
+              properties: {
+                ...offsetGeojson.properties,
+                id: Date.now() + duplicateCount,
+                name: `${geojson.properties?.name || '图形'}_副本`,
+                created: new Date().toISOString()
+              }
+            }
+            drawnItems.addLayer(newLayer)
+            duplicateCount++
+          })
+        } catch (error) {
+          console.warn('复制图层失败:', error)
+        }
+      })
+
+      updateStats()
+      ElMessage.success(`已复制 ${duplicateCount} 个图形`)
+    } catch (error) {
+      ElMessage.error('复制失败: ' + error.message)
+    }
+
     hideContextMenu()
   }
 
-  const duplicateSelected = createPlaceholderFunction('复制图形')
-  const cropWithSelected = createPlaceholderFunction('裁剪')
-  const unionSelected = createPlaceholderFunction('合并')
-  const bufferSelected = createPlaceholderFunction('缓冲区分析')
-  const convexHull = createPlaceholderFunction('凸包分析')
+  const unionSelected = async () => {
+    if (selectedLayers.value.size < 2) {
+      ElMessage.warning('请选择至少两个多边形进行合并')
+      hideContextMenu()
+      return
+    }
+
+    try {
+      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
+      if (!drawnItems) {
+        ElMessage.warning('地图未准备好')
+        return
+      }
+
+      const polygons = []
+      selectedLayers.value.forEach(layer => {
+        try {
+          const geojson = layer.toGeoJSON()
+          if (geojson.geometry.type.includes('Polygon')) {
+            polygons.push(geojson)
+          }
+        } catch (error) {
+          console.warn('处理图层失败:', error)
+        }
+      })
+
+      if (polygons.length < 2) {
+        ElMessage.warning('至少需要两个多边形才能合并')
+        hideContextMenu()
+        return
+      }
+
+      // 使用Turf.js进行合并
+      let result = polygons[0]
+      for (let i = 1; i < polygons.length; i++) {
+        try {
+          result = turf.union(turf.featureCollection([result, polygons[i]]))
+        } catch (e) {
+          console.warn('合并失败:', e)
+        }
+      }
+
+      // 删除选中的原始图层
+      selectedLayers.value.forEach(layer => drawnItems.removeLayer(layer))
+      selectedLayers.value.clear()
+
+      // 添加合并后的图层
+      const mergedLayerGroup = L.geoJSON(result, {
+        style: { color: '#27ae60', weight: 3, fillOpacity: 0.2 }
+      })
+
+      mergedLayerGroup.eachLayer(newLayer => {
+        newLayer.feature = {
+          ...result,
+          properties: {
+            name: '合并图形',
+            created: new Date().toISOString(),
+            type: 'polygon'
+          }
+        }
+        drawnItems.addLayer(newLayer)
+      })
+
+      updateStats()
+      ElMessage.success('图形已成功合并')
+    } catch (error) {
+      console.error('合并失败:', error)
+      ElMessage.error('合并失败: ' + error.message)
+    }
+
+    hideContextMenu()
+  }
+
+  const bufferSelected = async () => {
+    if (selectedLayers.value.size === 0) {
+      ElMessage.warning('请先选择图形')
+      hideContextMenu()
+      return
+    }
+
+    try {
+      const { value: radiusStr } = await ElMessageBox.prompt(
+        '请输入缓冲区半径（单位：米）',
+        '创建缓冲区',
+        {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          inputValue: '100',
+          inputPattern: /^\d+(\.\d+)?$/,
+          inputErrorMessage: '请输入有效的数字'
+        }
+      )
+
+      const radius = parseFloat(radiusStr)
+      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
+      if (!drawnItems) {
+        ElMessage.warning('地图未准备好')
+        return
+      }
+
+      let bufferCount = 0
+      selectedLayers.value.forEach(layer => {
+        try {
+          const geojson = layer.toGeoJSON()
+          const buffered = turf.buffer(geojson, radius, { units: 'meters' })
+
+          const bufferLayerGroup = L.geoJSON(buffered, {
+            style: { color: '#f39c12', weight: 2, fillOpacity: 0.1, dashArray: '5, 5' }
+          })
+
+          bufferLayerGroup.eachLayer(newLayer => {
+            newLayer.feature = {
+              ...buffered,
+              properties: {
+                name: `缓冲区_${radius}m`,
+                created: new Date().toISOString(),
+                type: 'buffer',
+                radius: radius
+              }
+            }
+            drawnItems.addLayer(newLayer)
+            bufferCount++
+          })
+        } catch (error) {
+          console.warn('创建缓冲区失败:', error)
+        }
+      })
+
+      updateStats()
+      ElMessage.success(`已创建 ${bufferCount} 个缓冲区`)
+    } catch (e) {
+      if (e !== 'cancel') {
+        ElMessage.error('创建缓冲区失败: ' + e.message)
+      }
+    }
+
+    hideContextMenu()
+  }
+
+  const convexHull = () => {
+    if (selectedLayers.value.size < 3) {
+      ElMessage.warning('请至少选择3个图形创建凸包')
+      hideContextMenu()
+      return
+    }
+
+    try {
+      const drawnItems = leafletMapRef.value?.getDrawnItems?.()
+      if (!drawnItems) {
+        ElMessage.warning('地图未准备好')
+        return
+      }
+
+      // 收集所有坐标点
+      const points = []
+      selectedLayers.value.forEach(layer => {
+        try {
+          const geojson = layer.toGeoJSON()
+          const coords = turf.coordAll(geojson)
+          points.push(...coords.map(coord => turf.point(coord)))
+        } catch (error) {
+          console.warn('提取坐标失败:', error)
+        }
+      })
+
+      if (points.length < 3) {
+        ElMessage.warning('点数不足，无法创建凸包')
+        hideContextMenu()
+        return
+      }
+
+      // 创建凸包
+      const hull = turf.convex(turf.featureCollection(points))
+
+      if (!hull) {
+        ElMessage.error('创建凸包失败')
+        hideContextMenu()
+        return
+      }
+
+      // 添加凸包图层
+      const hullLayerGroup = L.geoJSON(hull, {
+        style: { color: '#e74c3c', weight: 3, fillOpacity: 0.1, dashArray: '10, 5' }
+      })
+
+      hullLayerGroup.eachLayer(newLayer => {
+        newLayer.feature = {
+          ...hull,
+          properties: {
+            name: '凸包',
+            created: new Date().toISOString(),
+            type: 'convexHull'
+          }
+        }
+        drawnItems.addLayer(newLayer)
+      })
+
+      updateStats()
+      ElMessage.success('凸包已创建')
+    } catch (error) {
+      console.error('创建凸包失败:', error)
+      ElMessage.error('创建凸包失败: ' + error.message)
+    }
+
+    hideContextMenu()
+  }
+
+  const cropWithSelected = async () => {
+    ElMessage.info('裁剪功能需要选择一个裁剪边界多边形，该功能即将推出')
+    hideContextMenu()
+  }
 
   // === 监听器清理 ===
   const cleanup = () => {

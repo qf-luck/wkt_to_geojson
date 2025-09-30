@@ -17,15 +17,22 @@ import 'leaflet-draw'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import wellknown from 'wellknown'
 
-// 全局修复leaflet-draw的readableArea bug
-if (typeof window !== 'undefined') {
+// 全局修复leaflet-draw的readableArea bug (只在组件外执行一次)
+let leafletDrawFixed = false
+if (typeof window !== 'undefined' && !leafletDrawFixed) {
   // 延迟修复以确保leaflet-draw完全加载
   setTimeout(() => {
-    if (window.L && window.L.GeometryUtil) {
+    if (window.L && window.L.GeometryUtil && !leafletDrawFixed) {
       // 重写有问题的函数
       window.L.GeometryUtil.readableArea = function(area, isMetric, type) {
         let areaStr = ''
-        
+
+        // 确保 area 是数字
+        area = parseFloat(area)
+        if (isNaN(area)) {
+          return '0 m²'
+        }
+
         if (isMetric !== false) { // 默认使用公制
           if (area >= 10000) {
             areaStr = (area * 0.0001).toFixed(2) + ' 公顷'
@@ -40,9 +47,38 @@ if (typeof window !== 'undefined') {
             areaStr = area.toFixed(2) + ' ft²'
           }
         }
-        
+
         return areaStr
       }
+
+      window.L.GeometryUtil.readableDistance = function(distance, isMetric, isFeet, isNauticalMile) {
+        let distanceStr = ''
+
+        // 确保 distance 是数字
+        distance = parseFloat(distance)
+        if (isNaN(distance)) {
+          return '0 m'
+        }
+
+        if (isMetric) {
+          if (distance > 1000) {
+            distanceStr = (distance / 1000).toFixed(2) + ' km'
+          } else {
+            distanceStr = distance.toFixed(2) + ' m'
+          }
+        } else {
+          distance *= 3.28084  // 转换为英尺
+          if (distance >= 5280) {
+            distanceStr = (distance / 5280).toFixed(2) + ' 英里'
+          } else {
+            distanceStr = distance.toFixed(2) + ' ft'
+          }
+        }
+
+        return distanceStr
+      }
+
+      leafletDrawFixed = true
     }
   }, 0)
 }
@@ -87,59 +123,7 @@ const fixLeafletIcons = () => {
   }
 }
 
-// 修复leaflet-draw的readableArea bug
-const fixLeafletDrawBug = () => {
-  try {
-    // 等待leaflet-draw完全加载
-    if (window.L && window.L.GeometryUtil) {
-      // 重写readableArea函数以修复bug
-      window.L.GeometryUtil.readableArea = function(area, isMetric, type) {
-        let areaStr = ''
-        
-        if (isMetric) {
-          if (area >= 10000) {
-            areaStr = (area * 0.0001).toFixed(2) + ' 公顷'
-          } else {
-            areaStr = area.toFixed(2) + ' m²'
-          }
-        } else {
-          area *= 10.7639  // 转换为平方英尺
-          if (area >= 43560) {
-            areaStr = (area / 43560).toFixed(2) + ' 英亩'
-          } else {
-            areaStr = area.toFixed(2) + ' ft²'
-          }
-        }
-        
-        return areaStr
-      }
-      
-      // 重写readableDistance函数
-      window.L.GeometryUtil.readableDistance = function(distance, isMetric, isFeet, isNauticalMile) {
-        let distanceStr = ''
-        
-        if (isMetric) {
-          if (distance > 1000) {
-            distanceStr = (distance / 1000).toFixed(2) + ' km'
-          } else {
-            distanceStr = distance.toFixed(2) + ' m'
-          }
-        } else {
-          distance *= 3.28084  // 转换为英尺
-          if (distance >= 5280) {
-            distanceStr = (distance / 5280).toFixed(2) + ' 英里'
-          } else {
-            distanceStr = distance.toFixed(2) + ' ft'
-          }
-        }
-        
-        return distanceStr
-      }
-    }
-  } catch (error) {
-    console.warn('修复leaflet-draw bug失败:', error)
-  }
-}
+// 无需在组件内重复修复 - 已在组件外全局修复
 
 // 预留的格式化函数供将来使用
 // const formatArea = (squareMeters) => {
@@ -223,9 +207,6 @@ const initTileLayers = () => {
 const setupDrawControls = () => {
   try {
     if (drawControl) map.removeControl(drawControl)
-
-    // 应用leaflet-draw bug修复
-    fixLeafletDrawBug()
 
     drawControl = new L.Control.Draw({
       position: 'topleft',
@@ -607,7 +588,6 @@ const initMap = async () => {
     }
 
     fixLeafletIcons()
-    fixLeafletDrawBug()
 
     if (map) {
       map.off()
@@ -849,9 +829,8 @@ watch(() => props.currentMapStyle, (newStyle) => {
 })
 
 onMounted(() => {
-  // 立即应用leaflet-draw修复
+  // 延迟初始化地图以确保容器准备就绪
   setTimeout(() => {
-    fixLeafletDrawBug()
     initMap()
   }, 100)
 })
