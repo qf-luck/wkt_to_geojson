@@ -92,16 +92,40 @@
         </div>
       </div>
 
+      <!-- 地图工具栏（地图上方） -->
+      <MapToolbar
+        ref="mapToolbarRef"
+        @jump-to-coordinate="handleJumpToCoordinate"
+        @crs-change="handleCRSChange"
+        @measure-distance="handleMeasureDistance"
+        @measure-area="handleMeasureArea"
+        @clear-measure="handleClearMeasure"
+        @style-change="handleStyleChange"
+      />
+
       <!-- 核心地图组件 -->
-      <LeafletMap
-        ref="leafletMapRef"
-        :currentMapStyle="currentMapStyle"
-        :loading="mapLoading"
-        @geometry-updated="handleGeometryUpdated"
-        @selection-changed="handleSelectionChanged"
-        @mouse-position-changed="handleMousePositionChanged"
-        @show-context-menu="handleShowContextMenu"
-        @show-layer-properties="handleShowLayerProperties"
+      <div class="map-wrapper">
+        <LeafletMap
+          ref="leafletMapRef"
+          :currentMapStyle="currentMapStyle"
+          :loading="mapLoading"
+          @geometry-updated="handleGeometryUpdated"
+          @selection-changed="handleSelectionChanged"
+          @mouse-position-changed="handleMousePositionChanged"
+          @show-context-menu="handleShowContextMenu"
+          @show-layer-properties="handleShowLayerProperties"
+        />
+      </div>
+
+      <!-- 图层管理面板（地图下方） -->
+      <LayerPanel
+        :layers="layersList"
+        @layer-select="handleLayerSelect"
+        @layer-visibility-change="handleLayerVisibilityChange"
+        @layer-delete="handleLayerDelete"
+        @zoom-to-layer="handleZoomToLayer"
+        @opacity-change="handleOpacityChange"
+        @selection-change="handleLayerSelectionChange"
       />
     </div>
 
@@ -116,13 +140,16 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Mouse, Position, Location, Select, DataLine
 } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
 import PropertiesViewer from './PropertiesViewer.vue'
+import MapToolbar from './MapToolbar.vue'
+import LayerPanel from './LayerPanel.vue'
+import { transformGeoJSON } from '../utils/coordTransform'
 
 // Props
 defineProps({
@@ -154,6 +181,7 @@ const emit = defineEmits([
 
 // 组件引用
 const leafletMapRef = ref(null)
+const mapToolbarRef = ref(null)
 
 // 响应式数据
 const selectedLayersCount = ref(0)
@@ -161,6 +189,8 @@ const showPropertiesDialog = ref(false)
 const currentLayer = ref(null)
 const canUndo = ref(false)
 const canRedo = ref(false)
+const layersList = ref([])
+const currentCRS = ref('WGS84') // 当前坐标系统
 
 // 计算属性
 const hasSelection = computed(() => selectedLayersCount.value > 0)
@@ -176,6 +206,7 @@ const updateHistoryStatus = () => {
 // 事件处理器
 const handleGeometryUpdated = () => {
   updateHistoryStatus()
+  updateLayersList() // 更新图层列表
   emit('geometry-updated')
 }
 
@@ -305,6 +336,255 @@ const getSelectedLayers = () => {
   }
   return new Set()
 }
+
+// MapToolbar 事件处理器
+const handleJumpToCoordinate = ({ lng, lat, zoom }) => {
+  if (leafletMapRef.value) {
+    leafletMapRef.value.jumpToCoordinate?.(lng, lat, zoom)
+  }
+}
+
+const handleCRSChange = async (newCRS) => {
+  if (!leafletMapRef.value || newCRS === currentCRS.value) {
+    return
+  }
+
+  try {
+    const drawnItems = leafletMapRef.value.getDrawnItems()
+    if (!drawnItems || drawnItems.getLayers().length === 0) {
+      currentCRS.value = newCRS
+      ElMessage.success(`已切换到 ${newCRS} 坐标系统`)
+      return
+    }
+
+    // 确认是否要转换现有图层
+    await ElMessageBox.confirm(
+      `切换坐标系统将转换地图上的所有图层坐标。是否继续？`,
+      '坐标系统转换',
+      {
+        type: 'warning',
+        confirmButtonText: '确定转换',
+        cancelButtonText: '取消'
+      }
+    )
+
+    // 转换所有图层
+    const oldCRS = currentCRS.value
+    const layers = []
+
+    drawnItems.eachLayer(layer => {
+      try {
+        const geojson = layer.toGeoJSON()
+        const transformed = transformGeoJSON(geojson, oldCRS, newCRS)
+        layers.push(transformed)
+      } catch (error) {
+        console.error('图层转换失败:', error)
+      }
+    })
+
+    if (layers.length > 0) {
+      // 清空现有图层
+      leafletMapRef.value.clearAllLayers()
+
+      // 绘制转换后的图层
+      for (const layer of layers) {
+        await leafletMapRef.value.drawOnMap(layer, 'geojson', { clearExisting: false, autoFit: false })
+      }
+
+      // 适应视图
+      leafletMapRef.value.zoomToFit()
+
+      currentCRS.value = newCRS
+      ElMessage.success(`已将 ${layers.length} 个图层从 ${oldCRS} 转换到 ${newCRS}`)
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('坐标系统切换失败:', error)
+      ElMessage.error('坐标系统切换失败')
+    }
+  }
+}
+
+const handleMeasureDistance = () => {
+  if (leafletMapRef.value) {
+    const result = leafletMapRef.value.startMeasureDistance?.()
+    if (result && mapToolbarRef.value) {
+      mapToolbarRef.value.setMeasureResult?.(result)
+    }
+  }
+}
+
+const handleMeasureArea = () => {
+  if (leafletMapRef.value) {
+    const result = leafletMapRef.value.startMeasureArea?.()
+    if (result && mapToolbarRef.value) {
+      mapToolbarRef.value.setMeasureResult?.(result)
+    }
+  }
+}
+
+const handleClearMeasure = () => {
+  if (leafletMapRef.value) {
+    leafletMapRef.value.clearMeasure?.()
+  }
+}
+
+const handleStyleChange = (style) => {
+  emit('style-change', style)
+}
+
+// LayerPanel 事件处理器
+const handleLayerSelect = (layer) => {
+  // 图层选择逻辑已在 LayerPanel 内部处理
+}
+
+const handleLayerVisibilityChange = (layer) => {
+  console.log('切换图层可见性:', layer.name, layer.visible)
+
+  if (!leafletMapRef.value) return
+
+  const drawnItems = leafletMapRef.value.getDrawnItems()
+  if (!drawnItems) return
+
+  drawnItems.eachLayer(l => {
+    if (l._leaflet_id === layer.id) {
+      if (layer.visible) {
+        // 显示图层
+        if (l.setStyle) {
+          l.setStyle({ opacity: 0.8, fillOpacity: 0.5 })
+        }
+        if (l.setOpacity) {
+          l.setOpacity(1)
+        }
+        ElMessage.success(`已显示图层: ${layer.name}`)
+      } else {
+        // 隐藏图层
+        if (l.setStyle) {
+          l.setStyle({ opacity: 0, fillOpacity: 0 })
+        }
+        if (l.setOpacity) {
+          l.setOpacity(0)
+        }
+        ElMessage.info(`已隐藏图层: ${layer.name}`)
+      }
+    }
+  })
+}
+
+const handleLayerDelete = (layer) => {
+  console.log('删除图层:', layer.name)
+
+  if (!leafletMapRef.value) return
+
+  const drawnItems = leafletMapRef.value.getDrawnItems()
+  if (!drawnItems) return
+
+  let deleted = false
+  drawnItems.eachLayer(l => {
+    if (l._leaflet_id === layer.id) {
+      drawnItems.removeLayer(l)
+      deleted = true
+    }
+  })
+
+  if (deleted) {
+    updateLayersList()
+    emit('geometry-updated') // 触发几何更新
+    ElMessage.success(`已删除图层: ${layer.name}`)
+  }
+}
+
+const handleZoomToLayer = (layer) => {
+  console.log('缩放到图层:', layer.name)
+
+  if (!leafletMapRef.value) return
+
+  const map = leafletMapRef.value.getMap()
+  const drawnItems = leafletMapRef.value.getDrawnItems()
+  if (!drawnItems || !map) return
+
+  let found = false
+  drawnItems.eachLayer(l => {
+    if (l._leaflet_id === layer.id) {
+      found = true
+      if (l.getBounds) {
+        // 面/线要素
+        map.fitBounds(l.getBounds(), { padding: [50, 50], animate: true })
+      } else if (l.getLatLng) {
+        // 点要素
+        map.setView(l.getLatLng(), 15, { animate: true })
+      }
+      ElMessage.success(`已缩放到图层: ${layer.name}`)
+    }
+  })
+
+  if (!found) {
+    ElMessage.warning(`未找到图层: ${layer.name}`)
+  }
+}
+
+const handleOpacityChange = (opacity) => {
+  if (leafletMapRef.value) {
+    const drawnItems = leafletMapRef.value.getDrawnItems()
+    if (drawnItems) {
+      drawnItems.eachLayer(l => {
+        if (l.setStyle) {
+          l.setStyle({ opacity: opacity, fillOpacity: opacity * 0.6 })
+        }
+      })
+      ElMessage.success(`已设置透明度: ${Math.round(opacity * 100)}%`)
+    }
+  }
+}
+
+const handleLayerSelectionChange = (selectedLayers) => {
+  // 图层选择变化
+  console.log('选中的图层:', selectedLayers)
+}
+
+// 更新图层列表
+const updateLayersList = () => {
+  if (!leafletMapRef.value) {
+    layersList.value = []
+    return
+  }
+
+  const drawnItems = leafletMapRef.value.getDrawnItems()
+  if (!drawnItems) {
+    layersList.value = []
+    return
+  }
+
+  const layers = []
+  let index = 1
+  drawnItems.eachLayer(layer => {
+    try {
+      const geojson = layer.toGeoJSON()
+      const layerType = geojson.geometry?.type || 'Unknown'
+      const layerName = geojson.properties?.name || `图层 ${index}`
+
+      layers.push({
+        id: layer._leaflet_id,
+        name: layerName,
+        type: layerType,
+        visible: true, // 默认可见
+        selected: false,
+        _layer: layer // 保存layer引用
+      })
+      index++
+    } catch (error) {
+      console.warn('无法获取图层信息:', error)
+    }
+  })
+
+  layersList.value = layers
+  console.log('图层列表已更新:', layers.length, '个图层')
+}
+
+// 监听几何更新以刷新图层列表
+watch(() => hasGeometry, () => {
+  updateLayersList()
+}, { deep: true, immediate: true })
 
 // 暴露方法和引用给父组件
 defineExpose({
@@ -455,6 +735,16 @@ defineExpose({
 
 .info-item .el-icon {
   color: #6c757d;
+}
+
+/* 地图容器 */
+.map-wrapper {
+  position: relative;
+  width: 100%;
+  height: 600px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 
 /* Radio按钮组样式优化 */

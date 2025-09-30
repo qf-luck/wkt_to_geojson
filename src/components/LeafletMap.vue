@@ -975,6 +975,155 @@ onUnmounted(() => {
   }
 })
 
+// === 坐标跳转 ===
+const jumpToCoordinate = (lng, lat, zoom = 12) => {
+  if (!map) {
+    ElMessage.warning('地图未准备好')
+    return
+  }
+
+  try {
+    map.setView([lat, lng], zoom, { animate: true })
+
+    // 添加临时标记
+    const marker = L.marker([lat, lng], {
+      icon: L.divIcon({
+        className: 'jump-marker',
+        html: '<div style="background: #ff4444; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>'
+      })
+    }).addTo(map)
+
+    // 3秒后移除标记
+    setTimeout(() => {
+      map.removeLayer(marker)
+    }, 3000)
+  } catch (error) {
+    console.error('跳转失败:', error)
+    ElMessage.error('坐标跳转失败')
+  }
+}
+
+// === 测量工具 ===
+let measureLayer = null
+
+const startMeasureDistance = () => {
+  if (!map) return
+
+  // 清除之前的测量
+  if (measureLayer) {
+    map.removeLayer(measureLayer)
+  }
+
+  const points = []
+  let tempLine = null
+
+  const measureClick = (e) => {
+    points.push(e.latlng)
+
+    if (points.length === 1) {
+      // 第一个点
+      L.circleMarker(e.latlng, { radius: 6, color: '#ff4444' }).addTo(map)
+      ElMessage.info('请点击第二个点')
+    } else if (points.length === 2) {
+      // 第二个点 - 计算距离
+      L.circleMarker(e.latlng, { radius: 6, color: '#ff4444' }).addTo(map)
+
+      const line = L.polyline(points, { color: '#ff4444', weight: 3, dashArray: '5, 10' }).addTo(map)
+      measureLayer = line
+
+      const distance = points[0].distanceTo(points[1])
+      const distanceText = distance < 1000
+        ? `${distance.toFixed(2)} 米`
+        : `${(distance / 1000).toFixed(2)} 公里`
+
+      const midpoint = L.latLng(
+        (points[0].lat + points[1].lat) / 2,
+        (points[0].lng + points[1].lng) / 2
+      )
+
+      L.marker(midpoint, {
+        icon: L.divIcon({
+          className: 'measure-label',
+          html: `<div style="background: white; padding: 4px 8px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-weight: bold; color: #ff4444;">${distanceText}</div>`
+        })
+      }).addTo(map)
+
+      map.off('click', measureClick)
+      ElMessage.success(`测量完成: ${distanceText}`)
+
+      return { title: '距离测量', value: distanceText }
+    }
+  }
+
+  map.on('click', measureClick)
+}
+
+const startMeasureArea = () => {
+  if (!map) return
+
+  // 使用leaflet-draw的多边形工具
+  const polygonDrawer = new L.Draw.Polygon(map, drawControl.options.draw.polygon)
+  polygonDrawer.enable()
+
+  map.once(L.Draw.Event.CREATED, (event) => {
+    const layer = event.layer
+    const area = L.GeometryUtil.geodesicArea(layer.getLatLngs()[0])
+
+    const areaText = area < 10000
+      ? `${area.toFixed(2)} 平方米`
+      : area < 1000000
+      ? `${(area / 10000).toFixed(2)} 公顷`
+      : `${(area / 1000000).toFixed(2)} 平方公里`
+
+    layer.setStyle({ color: '#4CAF50', fillOpacity: 0.2 })
+    layer.addTo(map)
+    measureLayer = layer
+
+    const center = layer.getBounds().getCenter()
+    L.marker(center, {
+      icon: L.divIcon({
+        className: 'measure-label',
+        html: `<div style="background: white; padding: 4px 8px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-weight: bold; color: #4CAF50;">${areaText}</div>`
+      })
+    }).addTo(map)
+
+    ElMessage.success(`测量完成: ${areaText}`)
+
+    return { title: '面积测量', value: areaText }
+  })
+}
+
+const clearMeasure = () => {
+  if (measureLayer && map) {
+    map.removeLayer(measureLayer)
+    measureLayer = null
+  }
+}
+
+// === 获取图层列表 ===
+const getLayersList = () => {
+  const layers = []
+  if (!drawnItems) return layers
+
+  drawnItems.eachLayer(layer => {
+    try {
+      const feature = layer.toGeoJSON()
+      layers.push({
+        id: layer._leaflet_id,
+        name: layer.feature?.properties?.name || `图层${layer._leaflet_id}`,
+        type: feature.geometry.type,
+        selected: selectedLayers.value.has(layer),
+        visible: true,
+        layer: layer
+      })
+    } catch (error) {
+      console.warn('获取图层信息失败:', error)
+    }
+  })
+
+  return layers
+}
+
 // === 暴露方法 ===
 defineExpose({
   drawOnMap,
@@ -994,7 +1143,14 @@ defineExpose({
   redo: redoMapAction,
   canUndo: () => mapHistory.canUndo.value,
   canRedo: () => mapHistory.canRedo.value,
-  saveMapState
+  saveMapState,
+  // 新增方法
+  jumpToCoordinate,
+  startMeasureDistance,
+  startMeasureArea,
+  clearMeasure,
+  getLayersList,
+  getMap: () => map
 })
 </script>
 
