@@ -7,10 +7,15 @@
 
 html, body {
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  line-height: 1.6;
+  /* 中文优先字体栈 - 更适合中国用户 */
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "微软雅黑", "Segoe UI", "Helvetica Neue", Arial, "Hiragino Sans GB", "Heiti SC", "WenQuanYi Micro Hei", sans-serif;
+  line-height: 1.8; /* 中文阅读更舒适的行高 */
   color: #333;
   background: #f5f5f5;
+  letter-spacing: 0.02em; /* 轻微的字间距改善中文阅读 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 #app {
@@ -339,6 +344,50 @@ html, body {
 pre,
 code {
   font-family: 'Fira Code', 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', 'Menlo', 'Consolas', monospace !important;
+}
+
+/* ===== 中文排版优化 ===== */
+/* 中文标点符号优化 */
+p, li, span, div {
+  text-align: justify; /* 两端对齐更适合中文 */
+  text-justify: inter-ideograph; /* 中文字间对齐 */
+}
+
+/* 防止中文字体过细 */
+h1, h2, h3, h4, h5, h6,
+.el-dialog__title,
+.el-descriptions__title,
+strong, b {
+  font-weight: 600 !important; /* 中文字体使用600比700更好看 */
+}
+
+/* 中文数字和英文混排优化 */
+.mixed-text {
+  font-feature-settings: "tnum"; /* 表格数字 */
+  font-variant-numeric: tabular-nums;
+}
+
+/* 改善中文按钮文字 */
+.el-button {
+  letter-spacing: 0.08em !important; /* 按钮文字间距 */
+  font-size: 14px !important; /* 中文按钮字号 */
+}
+
+.el-button--small {
+  font-size: 13px !important;
+  letter-spacing: 0.05em !important;
+}
+
+/* 优化对话框中文显示 */
+.el-dialog__title {
+  letter-spacing: 0.05em;
+}
+
+/* 优化表单标签 */
+.el-form-item__label {
+  font-weight: 500 !important;
+  color: #606266 !important;
+  letter-spacing: 0.05em !important;
 }
 
 /* ===== 工具提示样式 ===== */

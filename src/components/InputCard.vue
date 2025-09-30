@@ -58,6 +58,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import FileUpload from './FileUpload.vue'
 import { useHistory } from '../composables/useHistory'
 import { useFileOperations } from '../composables/useFileOperations'
+import { examplesList, getExample } from '../data/examples'
 
 // Props
 const props = defineProps({
@@ -86,47 +87,64 @@ const handleInput = (value) => {
   emit('update:modelValue', value)
 }
 
-const loadSample = () => {
-  let sampleData
+const loadSample = async () => {
+  // 使用 Element Plus 的选择框选择示例
+  try {
+    const { value: selectedId } = await ElMessageBox.prompt(
+      '请选择示例数据',
+      '加载示例',
+      {
+        confirmButtonText: '加载',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: '输入示例编号 (1-8)',
+        message: `
+可用示例：
+1. 🏛️ 北京天安门
+2. 🗼 上海东方明珠
+3. 🏞️ 杭州西湖
+4. 🌊 长江主要河段
+5. 🏙️ 京津冀区域
+6. 🌆 粤港澳大湾区
+7. 🐼 成都市区
+8. 🏟️ 国家体育场（鸟巢）
+        `.trim(),
+        inputValidator: (value) => {
+          const num = parseInt(value)
+          if (!num || num < 1 || num > 8) {
+            return '请输入1-8之间的数字'
+          }
+          return true
+        }
+      }
+    )
 
-  if (props.type === 'geojson') {
-    sampleData = {
-      type: 'FeatureCollection',
-      features: [
-        {
-          type: 'Feature',
-          properties: {
-            name: '北京市区',
-            type: '行政区',
-            population: 21540000,
-            level: 'district',
-          },
-          geometry: {
-            type: 'Polygon',
-            coordinates: [
-              [
-                [116.3, 39.9],
-                [116.4, 39.9],
-                [116.4, 40.0],
-                [116.3, 40.0],
-                [116.3, 39.9],
-              ],
-            ],
-          },
-        },
-      ],
+    const index = parseInt(selectedId) - 1
+    const example = examplesList[index]
+    if (!example) {
+      ElMessage.error('无效的示例编号')
+      return
     }
-    emit('update:modelValue', JSON.stringify(sampleData, null, 2))
-  } else {
-    sampleData = `-- 北京市区多边形 (行政区)
-POLYGON((116.3 39.9, 116.4 39.9, 116.4 40.0, 116.3 40.0, 116.3 39.9))
 
--- 天安门广场点位 (地标)
-POINT(116.3912 39.9042)`
-    emit('update:modelValue', sampleData)
+    const exampleData = getExample(example.id)
+    if (!exampleData) {
+      ElMessage.error('示例数据不存在')
+      return
+    }
+
+    let content
+    if (props.type === 'geojson') {
+      content = JSON.stringify(exampleData.geojson, null, 2)
+    } else {
+      content = exampleData.wkt
+    }
+
+    addToHistory(props.modelValue)
+    emit('update:modelValue', content)
+    ElMessage.success(`已加载示例: ${example.label}`)
+  } catch {
+    // 用户取消
   }
-
-  ElMessage.success('示例数据已加载')
 }
 
 const formatContent = () => {

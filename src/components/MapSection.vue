@@ -24,17 +24,25 @@
             :model-value="currentMapStyle"
             @change="$emit('style-change', $event)"
             size="small"
+            class="map-style-group"
           >
-            <el-radio-button value="osm">🗺️ 标准</el-radio-button>
+            <el-radio-button value="gaode">🗺️ 高德地图</el-radio-button>
+            <el-radio-button value="gaodeSatellite">🛰️ 高德卫星</el-radio-button>
+            <el-radio-button value="osm">🌍 OSM</el-radio-button>
             <el-radio-button value="light">☀️ 简洁</el-radio-button>
             <el-radio-button value="dark">🌙 暗色</el-radio-button>
-            <el-radio-button value="satellite">🛰️ 卫星</el-radio-button>
           </el-radio-group>
         </div>
 
         <!-- 基础操作 -->
         <div class="control-group">
           <el-button-group size="small">
+            <el-button @click="handleUndo" :disabled="!canUndo" title="撤销上一步操作">
+              ↶ 撤销
+            </el-button>
+            <el-button @click="handleRedo" :disabled="!canRedo" title="重做">
+              ↷ 重做
+            </el-button>
             <el-button @click="handleZoomToFit" :disabled="!hasGeometry" title="适应所有图形">
               🎯 适应范围
             </el-button>
@@ -151,13 +159,38 @@ const leafletMapRef = ref(null)
 const selectedLayersCount = ref(0)
 const showPropertiesDialog = ref(false)
 const currentLayer = ref(null)
+const canUndo = ref(false)
+const canRedo = ref(false)
 
 // 计算属性
 const hasSelection = computed(() => selectedLayersCount.value > 0)
 
+// 更新撤销/重做状态
+const updateHistoryStatus = () => {
+  if (leafletMapRef.value) {
+    canUndo.value = leafletMapRef.value.canUndo?.() || false
+    canRedo.value = leafletMapRef.value.canRedo?.() || false
+  }
+}
+
 // 事件处理器
 const handleGeometryUpdated = () => {
+  updateHistoryStatus()
   emit('geometry-updated')
+}
+
+const handleUndo = () => {
+  if (leafletMapRef.value) {
+    leafletMapRef.value.undo?.()
+    updateHistoryStatus()
+  }
+}
+
+const handleRedo = () => {
+  if (leafletMapRef.value) {
+    leafletMapRef.value.redo?.()
+    updateHistoryStatus()
+  }
 }
 
 const handleSelectionChanged = (selection) => {

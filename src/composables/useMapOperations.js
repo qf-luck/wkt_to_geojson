@@ -8,7 +8,7 @@ import L from 'leaflet'
 export function useMapOperations() {
   // === 核心状态 ===
   const leafletMapRef = ref(null)
-  const currentMapStyle = ref('osm')
+  const currentMapStyle = ref('gaode') // 默认使用高德地图（中国用户友好）
   const mousePosition = ref('经度: --, 纬度: --')
   const selectedLayers = ref(new Set())
   const mapLoading = ref(false)
@@ -27,14 +27,18 @@ export function useMapOperations() {
 
   // === 工具函数 ===
   const formatLength = (meters) => {
-    if (meters < 1000) return `${meters.toFixed(2)} m`
-    return `${(meters / 1000).toFixed(2)} km`
+    const num = parseFloat(meters)
+    if (isNaN(num) || num < 0) return '0 m'
+    if (num < 1000) return `${num.toFixed(2)} m`
+    return `${(num / 1000).toFixed(2)} km`
   }
 
   const formatArea = (squareMeters) => {
-    if (squareMeters < 10000) return `${squareMeters.toFixed(2)} m²`
-    if (squareMeters < 1000000) return `${(squareMeters / 10000).toFixed(2)} 公顷`
-    return `${(squareMeters / 1000000).toFixed(2)} km²`
+    const num = parseFloat(squareMeters)
+    if (isNaN(num) || num < 0) return '0 m²'
+    if (num < 10000) return `${num.toFixed(2)} m²`
+    if (num < 1000000) return `${(num / 10000).toFixed(2)} 公顷`
+    return `${(num / 1000000).toFixed(2)} km²`
   }
 
   const getGeometryTypeName = (type) => {

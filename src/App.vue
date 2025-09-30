@@ -80,6 +80,9 @@
 
       <!-- 快捷键帮助对话框 -->
       <ShortcutsDialog v-model="showShortcutsDialog" />
+
+      <!-- 文件导入对话框 -->
+      <FileImport v-model="showFileDialog" @import-success="handleFileImport" />
     </div>
   </div>
 </template>
@@ -95,6 +98,7 @@ import ContextMenu from './components/ContextMenu.vue'
 import GeometryInfoDialog from './components/GeometryInfoDialog.vue'
 import LoadingOverlay from './components/LoadingOverlay.vue'
 import ShortcutsDialog from './components/ShortcutsDialog.vue'
+import FileImport from './components/FileImport.vue'
 import { useGeometry } from './composables/useGeometry'
 import { useMapOperations } from './composables/useMapOperations'
 import { useValidation } from './composables/useValidation'
@@ -208,9 +212,11 @@ const totalArea = computed(() => {
 
 // === 工具函数 ===
 const formatArea = (squareMeters) => {
-  if (squareMeters < 10000) return `${squareMeters.toFixed(2)} m²`
-  if (squareMeters < 1000000) return `${(squareMeters / 10000).toFixed(2)} 公顷`
-  return `${(squareMeters / 1000000).toFixed(2)} km²`
+  const num = parseFloat(squareMeters)
+  if (isNaN(num) || num < 0) return '0 m²'
+  if (num < 10000) return `${num.toFixed(2)} m²`
+  if (num < 1000000) return `${(num / 10000).toFixed(2)} 公顷`
+  return `${(num / 1000000).toFixed(2)} km²`
 }
 
 const calculateLayerArea = (layer) => {
@@ -258,13 +264,80 @@ const handleGeometryUpdated = () => {
 }
 
 // === 文件操作 ===
-const handleExportFile = () => {
+const handleFileImport = async (data) => {
+  if (!mapSectionRef.value) {
+    ElMessage.warning('地图未准备好')
+    return
+  }
+
+  try {
+    const { geojson, mode, autoFit } = data
+
+    if (mode === 'replace') {
+      // 清空现有图层
+      const drawnItems = mapSectionRef.value?.getDrawnItems?.()
+      if (drawnItems) {
+        drawnItems.clearLayers()
+      }
+    }
+
+    // 将GeoJSON显示到地图
+    if (geojson.type === 'FeatureCollection') {
+      for (const feature of geojson.features) {
+        const geojsonText = JSON.stringify(feature)
+        await mapSectionRef.value.drawOnMap(geojsonText, 'geojson')
+      }
+    } else {
+      const geojsonText = JSON.stringify(geojson)
+      await mapSectionRef.value.drawOnMap(geojsonText, 'geojson')
+    }
+
+    // 自动居中
+    if (autoFit) {
+      setTimeout(() => {
+        mapSectionRef.value?.zoomToFit?.()
+      }, 300)
+    }
+
+    updateGeoJsonFromMap()
+  } catch (error) {
+    console.error('导入文件失败:', error)
+    ElMessage.error('导入失败: ' + error.message)
+  }
+}
+
+const handleExportFile = async () => {
   if (!hasGeometry.value) {
     ElMessage.warning('没有可导出的数据，请先在地图上绘制或导入图形')
     return
   }
 
   try {
+    // 询问用户要导出的格式
+    const { value: format } = await ElMessageBox.prompt(
+      '请选择导出格式',
+      '导出数据',
+      {
+        confirmButtonText: '导出',
+        cancelButtonText: '取消',
+        inputPlaceholder: '输入格式编号 (1-3)',
+        message: `
+可用格式：
+1. 📦 GeoJSON (.geojson) - 推荐格式
+2. 📝 WKT (.wkt) - 纯文本格式
+3. 🗺️ KML (.kml) - Google Earth 格式
+        `.trim(),
+        inputValidator: (value) => {
+          const num = parseInt(value)
+          if (!num || num < 1 || num > 3) {
+            return '请输入1-3之间的数字'
+          }
+          return true
+        }
+      }
+    )
+
+    const formatIndex = parseInt(format)
     const drawnItems = mapSectionRef.value?.getDrawnItems?.()
     if (!drawnItems) {
       ElMessage.error('无法获取地图数据')
@@ -291,19 +364,88 @@ const handleExportFile = () => {
       features: features
     }
 
-    const dataStr = JSON.stringify(exportData, null, 2)
-    const blob = new Blob([dataStr], { type: 'application/json' })
+    const timestamp = new Date().toISOString().split('T')[0]
+    let blob, filename, mimeType
+
+    if (formatIndex === 1) {
+      // GeoJSON
+      const dataStr = JSON.stringify(exportData, null, 2)
+      blob = new Blob([dataStr], { type: 'application/json' })
+      filename = `export_${timestamp}.geojson`
+      mimeType = 'application/json'
+    } else if (formatIndex === 2) {
+      // WKT
+      const wellknown = await import('wellknown')
+      const wktLines = features.map((feature, index) => {
+        const wkt = wellknown.default.stringify(feature.geometry)
+        const props = feature.properties || {}
+        const name = props.name || `图形${index + 1}`
+        return `-- ${name}\n${wkt}`
+      })
+      const wktContent = wktLines.join('\n\n')
+      blob = new Blob([wktContent], { type: 'text/plain' })
+      filename = `export_${timestamp}.wkt`
+      mimeType = 'text/plain'
+    } else if (formatIndex === 3) {
+      // KML
+      let kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>导出的地理数据</name>
+    <description>从 GeoJSON &amp; WKT 转换工具导出</description>
+`
+      features.forEach((feature, index) => {
+        const props = feature.properties || {}
+        const name = props.name || `图形${index + 1}`
+        const geom = feature.geometry
+
+        kmlContent += `    <Placemark>
+      <name>${name}</name>
+`
+        if (geom.type === 'Point') {
+          kmlContent += `      <Point>
+        <coordinates>${geom.coordinates[0]},${geom.coordinates[1]}</coordinates>
+      </Point>
+`
+        } else if (geom.type === 'LineString') {
+          const coords = geom.coordinates.map(c => `${c[0]},${c[1]}`).join(' ')
+          kmlContent += `      <LineString>
+        <coordinates>${coords}</coordinates>
+      </LineString>
+`
+        } else if (geom.type === 'Polygon') {
+          const coords = geom.coordinates[0].map(c => `${c[0]},${c[1]}`).join(' ')
+          kmlContent += `      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>${coords}</coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+`
+        }
+        kmlContent += `    </Placemark>
+`
+      })
+      kmlContent += `  </Document>
+</kml>`
+      blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' })
+      filename = `export_${timestamp}.kml`
+      mimeType = 'application/vnd.google-earth.kml+xml'
+    }
+
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `export_${new Date().toISOString().split('T')[0]}.geojson`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
 
-    ElMessage.success('导出成功！')
+    ElMessage.success(`导出成功！文件: ${filename}`)
   } catch (error) {
+    if (error === 'cancel') return // 用户取消
     console.error('导出失败:', error)
     ElMessage.error('导出失败: ' + error.message)
   }

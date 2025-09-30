@@ -16,6 +16,7 @@ import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import wellknown from 'wellknown'
+import { useHistory } from '../composables/useHistory'
 
 // 全局修复leaflet-draw的readableArea bug (只在组件外执行一次)
 let leafletDrawFixed = false
@@ -109,6 +110,98 @@ let drawControl = null
 const selectedLayers = ref(new Set())
 const isInitialized = ref(false)
 
+// 历史记录管理
+const mapHistory = useHistory(50)
+
+// 保存当前地图状态到历史
+const saveMapState = (description = '地图操作') => {
+  if (!drawnItems) return
+
+  const state = {
+    layers: [],
+    timestamp: Date.now()
+  }
+
+  drawnItems.eachLayer(layer => {
+    try {
+      state.layers.push({
+        geojson: layer.toGeoJSON(),
+        selected: selectedLayers.value.has(layer)
+      })
+    } catch (error) {
+      console.warn('保存图层失败:', error)
+    }
+  })
+
+  mapHistory.addToHistory(JSON.stringify(state), description)
+}
+
+// 从历史恢复地图状态
+const restoreMapState = (stateStr) => {
+  if (!stateStr || !drawnItems) return false
+
+  try {
+    const state = JSON.parse(stateStr)
+    drawnItems.clearLayers()
+    clearSelection()
+
+    state.layers.forEach(layerData => {
+      const layer = L.geoJSON(layerData.geojson, {
+        pointToLayer: (feature, latlng) => L.marker(latlng),
+        style: (feature) => {
+          const type = feature.geometry.type
+          if (type.includes('Polygon')) return { color: '#3498db', weight: 3, fillOpacity: 0.2 }
+          if (type.includes('LineString')) return { color: '#e74c3c', weight: 4 }
+          return {}
+        }
+      })
+
+      layer.eachLayer(l => {
+        l.feature = layerData.geojson
+        drawnItems.addLayer(l)
+        setupLayerEvents(l)
+        if (layerData.selected) {
+          selectLayer(l)
+        }
+      })
+    })
+
+    emit('geometry-updated')
+    return true
+  } catch (error) {
+    console.error('恢复地图状态失败:', error)
+    return false
+  }
+}
+
+// 撤销操作
+const undoMapAction = () => {
+  const prevState = mapHistory.undo()
+  if (prevState) {
+    if (restoreMapState(prevState)) {
+      ElMessage.success('已撤销')
+    } else {
+      ElMessage.error('撤销失败')
+    }
+  } else {
+    ElMessage.warning('没有可撤销的操作')
+  }
+}
+
+// 重做操作
+const redoMapAction = () => {
+  const nextState = mapHistory.redo()
+  if (nextState) {
+    if (restoreMapState(nextState)) {
+      ElMessage.success('已重做')
+    } else {
+      ElMessage.error('重做失败')
+    }
+  } else {
+    ElMessage.warning('没有可重做的操作')
+  }
+}
+
 // === 工具函数 ===
 const fixLeafletIcons = () => {
   try {
@@ -185,20 +278,40 @@ const calculateLength = (layer) => {
 // === 地图初始化 ===
 const initTileLayers = () => {
   tileLayers = {
+    // 中国地图服务（优先）
+    gaode: L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+      attribution: '&copy; <a href="https://www.amap.com/">高德地图</a>',
+      subdomains: ['1', '2', '3', '4'],
+      maxZoom: 18,
+      minZoom: 3
+    }),
+    gaodeSatellite: L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}', {
+      attribution: '&copy; <a href="https://www.amap.com/">高德卫星图</a>',
+      subdomains: ['1', '2', '3', '4'],
+      maxZoom: 18,
+      minZoom: 3
+    }),
+    tianditu: L.tileLayer('https://t{s}.tianditu.gov.cn/vec_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=vec&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=YOUR_TIANDITU_KEY', {
+      attribution: '&copy; <a href="https://www.tianditu.gov.cn/">天地图</a>',
+      subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'],
+      maxZoom: 18
+    }),
+
+    // 国际地图服务
     osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>',
       maxZoom: 19
     }),
     light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; CARTO',
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
       maxZoom: 19
     }),
     dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; CARTO',
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
       maxZoom: 19
     }),
     satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      attribution: '&copy; Esri',
+      attribution: '&copy; <a href="https://www.esri.com/">Esri</a>',
       maxZoom: 18
     })
   }
@@ -440,6 +553,9 @@ const setupMapEvents = () => {
 
     drawnItems.addLayer(layer)
     setupLayerEvents(layer)
+
+    // 保存到历史记录
+    saveMapState(`创建${getGeometryTypeName(type)}`)
     emit('geometry-updated')
 
       ElNotification({
@@ -461,12 +577,18 @@ const setupMapEvents = () => {
       }
       setupLayerEvents(layer)
     })
+
+    // 保存到历史记录
+    saveMapState('编辑图形')
     emit('geometry-updated')
     ElMessage.success('编辑完成')
   })
 
   map.on(L.Draw.Event.DELETED, () => {
     clearSelection()
+
+    // 保存到历史记录
+    saveMapState('删除图形')
     emit('geometry-updated')
     ElMessage.success('删除完成')
   })
@@ -557,12 +679,15 @@ const switchTileLayer = (styleKey) => {
     tileLayers[styleKey].addTo(map)
 
     const styleNames = {
+      gaode: '高德地图',
+      gaodeSatellite: '高德卫星图',
+      tianditu: '天地图',
       osm: '标准地图',
       light: '简洁地图',
       dark: '暗色地图',
       satellite: '卫星地图'
     }
-    ElMessage.success(`已切换到${styleNames[styleKey]}`)
+    ElMessage.success(`已切换到${styleNames[styleKey] || styleKey}`)
   } catch (error) {
     console.error('切换地图失败:', error)
     ElMessage.error('切换地图失败')
@@ -595,13 +720,16 @@ const initMap = async () => {
     }
 
     map = L.map(mapContainer.value, {
-      center: [39.9042, 116.4074],
-      zoom: 10,
+      center: [35.0, 105.0],  // 中国中心位置
+      zoom: 5,  // 更大的视野，适合查看整个中国
       zoomControl: true,
       attributionControl: true,
-      crs: L.CRS.EPSG3857,  // 明确指定坐标参考系统
-      worldCopyJump: false,  // 防止世界地图重复
-      maxBoundsViscosity: 1.0  // 边界粘性
+      crs: L.CRS.EPSG3857,
+      worldCopyJump: false,
+      maxBoundsViscosity: 1.0,
+      zoomSnap: 0.5,  // 允许更平滑的缩放
+      zoomDelta: 0.5,
+      wheelPxPerZoomLevel: 100  // 鼠标滚轮缩放更顺滑
     })
 
     initTileLayers()
@@ -627,12 +755,13 @@ const initMap = async () => {
   }
 }
 
-const drawOnMap = async (text, type) => {
+const drawOnMap = async (text, type, options = {}) => {
   if (!text || !map || !isInitialized.value) {
     return Promise.reject(new Error('地图未准备好或数据为空'))
   }
 
   try {
+    const { clearExisting = true, autoFit = true } = options
     let geojson
 
     if (type === 'geojson') {
@@ -676,9 +805,11 @@ const drawOnMap = async (text, type) => {
       }
     }
 
-    // 清空并重新绘制
-    drawnItems.clearLayers()
-    clearSelection()
+    // 根据选项决定是否清空现有图层
+    if (clearExisting) {
+      drawnItems.clearLayers()
+      clearSelection()
+    }
 
     const layer = L.geoJSON(geojson, {
       pointToLayer: (feature, latlng) => L.marker(latlng),
@@ -703,11 +834,11 @@ const drawOnMap = async (text, type) => {
       layerCount++
     })
 
-    // 自适应视图
-    if (drawnItems.getLayers().length > 0) {
+    // 根据选项决定是否自适应视图
+    if (autoFit && drawnItems.getLayers().length > 0) {
       try {
         const bounds = drawnItems.getBounds()
-        map.fitBounds(bounds.pad(0.1))
+        map.fitBounds(bounds.pad(0.1), { animate: true, duration: 0.5 })
       } catch (e) {
         console.warn('设置视图范围失败:', e)
       }
@@ -857,7 +988,13 @@ defineExpose({
   getSelectedLayers: () => selectedLayers.value,
   getSelectedLayerProperties,
   getDrawnItems: () => drawnItems,
-  isInitialized: () => isInitialized.value
+  isInitialized: () => isInitialized.value,
+  // 历史记录方法
+  undo: undoMapAction,
+  redo: redoMapAction,
+  canUndo: () => mapHistory.canUndo.value,
+  canRedo: () => mapHistory.canRedo.value,
+  saveMapState
 })
 </script>
 
